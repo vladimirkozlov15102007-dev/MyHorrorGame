@@ -1,12 +1,22 @@
-// Old Amber Factory — browser horror game, Three.js.
+// Old Amber Factory — tactical survival-horror in Three.js.
 //
-// Entry point: sets up renderer, wires input, runs the game loop.
+// Controls (per user spec):
+//   WASD       — move
+//   Shift      — sprint
+//   Ctrl       — crouch
+//   Space      — jump
+//   E          — interact
+//   LMB        — fire pistol
+//   RMB        — aim down sights
+//   R          — reload
 
 import * as THREE from "three";
 import { Audio } from "./audio.js";
 import { buildLevel } from "./level.js";
 import { Player } from "./player.js";
-import { Monster } from "./monster.js";
+import { Weapon } from "./weapon.js";
+import { SkeletonManager } from "./skeleton.js";
+import { ArrowSystem } from "./arrow.js";
 import { ThrowableSystem } from "./throwable.js";
 import { CCTV } from "./cctv.js";
 import { InteractionSystem } from "./interactive.js";
@@ -19,15 +29,18 @@ const renderer = new THREE.WebGLRenderer({
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x090b10, 1);
+renderer.setClearColor(0x87a8c4, 1);   // sunny sky
 renderer.shadowMap.enabled = false;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
-// level sets scene.fog; we default here in case:
-scene.fog = new THREE.FogExp2(0x0a0e14, 0.025);
+scene.background = new THREE.Color(0x87a8c4);
+scene.fog = new THREE.FogExp2(0xcddae0, 0.008);
 
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 260);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 300);
+scene.add(camera);   // so viewmodel parented to camera renders even if camera is detached
 
 window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -41,10 +54,12 @@ const player = new Player(camera, level);
 player.attachToScene(scene);
 
 const throwables = new ThrowableSystem(scene, level, player);
+const arrows = new ArrowSystem(scene, level, player);
+const skeletons = new SkeletonManager(scene, level, player, arrows);
+const weapon = new Weapon(scene, camera, player, level, skeletons);
 const cctv = new CCTV(scene, level);
 const ui = new UI();
-const interaction = new InteractionSystem(level, player, ui, throwables, cctv);
-const monster = new Monster(scene, level, player, throwables);
+const interaction = new InteractionSystem(level, player, ui, throwables, cctv, skeletons);
 
 // --------- Game state ---------
 const game = {
@@ -55,6 +70,11 @@ const game = {
   truckDriveTimer: 0,
 };
 
+// --------- Hit marker wiring ---------
+weapon.onHit = (part, killed) => {
+  ui.showHitMarker(killed);
+};
+
 // --------- Input ---------
 const keys = new Set();
 const canvasEl = document.getElementById("canvas");
@@ -62,25 +82,31 @@ const canvasEl = document.getElementById("canvas");
 document.addEventListener("keydown", (e) => {
   if (!game.running) return;
   const k = e.code;
+  if (keys.has(k)) return;   // ignore autorepeat
   keys.add(k);
+
   if (k === "KeyE") {
     player.input.interact = true;
     player.input.interactHeld = true;
-  } else if (k === "KeyX") {
-    player.toggleSprint();
-  } else if (k === "KeyQ") {
-    player.dropHeld(throwables, level);
+  } else if (k === "Space") {
+    player.input.jumpPressed = true;
+    player.tryJump();
+    e.preventDefault();
   } else if (k === "ShiftLeft" || k === "ShiftRight") {
-    player.input.binocHeld = true;
+    player.input.sprint = true;
   } else if (k === "ControlLeft" || k === "ControlRight" || k === "KeyC") {
     player.input.crouch = true;
+    e.preventDefault();
+  } else if (k === "KeyR") {
+    player.input.reloadPressed = true;
   }
 });
+
 document.addEventListener("keyup", (e) => {
   const k = e.code;
   keys.delete(k);
   if (k === "KeyE") player.input.interactHeld = false;
-  else if (k === "ShiftLeft" || k === "ShiftRight") player.input.binocHeld = false;
+  else if (k === "ShiftLeft" || k === "ShiftRight") player.input.sprint = false;
   else if (k === "ControlLeft" || k === "ControlRight" || k === "KeyC") player.input.crouch = false;
 });
 
@@ -89,77 +115,77 @@ document.addEventListener("mousemove", (e) => {
   player.onMouseMove(e.movementX || 0, e.movementY || 0);
 });
 
-// Mouse buttons for throwing
 document.addEventListener("mousedown", (e) => {
   if (!game.running || !game.pointerLocked) return;
-  if (e.button === 0) {
-    player.input.lmbHeld = true;
-    player.beginAim();
-  }
+  if (e.button === 0) player.input.lmb = true;
+  else if (e.button === 2) player.input.rmb = true;
 });
 document.addEventListener("mouseup", (e) => {
-  if (!game.running) return;
-  if (e.button === 0) {
-    player.input.lmbHeld = false;
-    if (player.state.aiming) player.endAimAndThrow(throwables);
-  }
+  if (e.button === 0) player.input.lmb = false;
+  else if (e.button === 2) player.input.rmb = false;
+});
+document.addEventListener("contextmenu", (e) => {
+  if (game.running) e.preventDefault();
 });
 
-// Wheel for binocular zoom
-document.addEventListener("wheel", (e) => {
-  if (!game.running) return;
-  if (!player.state.binocularsOn) return;
-  player.onMouseWheel(e.deltaY);
-  e.preventDefault();
-}, { passive: false });
-
 canvasEl.addEventListener("click", () => {
-  if (game.running && !game.pointerLocked) {
-    // If CCTV overlay is active, pointer-lock isn't needed for aim since player is immobile,
-    // but we still want mouselook for the world behind. Keep pointer lock on canvas.
-    canvasEl.requestPointerLock();
-  }
+  if (game.running && !game.pointerLocked) canvasEl.requestPointerLock();
 });
 document.addEventListener("pointerlockchange", () => {
   game.pointerLocked = document.pointerLockElement === canvasEl;
 });
 
-// --------- Start / death / win handlers ---------
+// --------- Lifecycle ---------
 function startGame() {
   // Player reset
-  player.setPosition(level.playerSpawn.x, 1.68, level.playerSpawn.z);
+  player.setPosition(level.playerSpawn.x, 1.72, level.playerSpawn.z);
   player.yaw = 0; player.pitch = 0;
-  player.state.health = 1.0;
+  player.state.hp = 100;
   player.state.stamina = 1.0;
-  player.state.binocularsOn = false;
-  player.state.binocZoom = 2.0;
+  player.state.dead = false;
   player.state.crouched = false;
   player.state.sprinting = false;
+  player.state.ads = false;
+  player.state.aimProgress = 0;
   player.state.hidden = false;
   player.state.hiddenIn = null;
-  player.state.dead = false;
-  player.state.held = null;
-  player.state.aiming = false;
-  player.state.aimPower = 0;
   player.state.usingCCTV = false;
+  player.state.held = null;
+  player.state.shotsFired = 0;
+  player.state.shotsHit = 0;
+  player.state.headshots = 0;
   player.state.timesHidden = 0;
-  player.state.binocularsSeconds = 0;
+  player.state.damageTakenTotal = 0;
   player.state.sprintingSeconds = 0;
-  player.state.throwsMade = 0;
+  player.state.crouchSeconds = 0;
+  player.state.recoilPitch = 0;
+  player.state.recoilYaw = 0;
+  player.state.shake = 0;
+  player.state.dmgFromYaw = null;
+  player.state.dmgTimer = 0;
   player.input.sprint = false;
   player.input.crouch = false;
-  player.input.binocHeld = false;
-  player.input.lmbHeld = false;
+  player.input.lmb = false;
+  player.input.rmb = false;
 
-  // Monster reset
-  monster.setSpawn(level.monsterSpawn.x, level.monsterSpawn.z);
-  monster.reset();
+  // Skeletons reset + respawn
+  skeletons.reset();
+  skeletons.spawn();
+  skeletons.onKilled = (skel) => {
+    if (skeletons.alive <= 0) {
+      ui.flashMessage("All hostiles down. Reach the truck.", 4.5);
+    }
+  };
+
+  // Weapon reset
+  weapon.reset();
+
+  // Arrows reset
+  arrows.reset();
 
   // Truck reset
   if (level.truck) level.truck.started = false;
-  interaction.truckState = {
-    active: false, step: 0, progress: 0, started: false, promptTimer: 0,
-  };
+  interaction.truckState = { active: false, step: 0, progress: 0, started: false, promptTimer: 0 };
 
   // CCTV reset
   cctv.deactivate(false);
@@ -176,28 +202,25 @@ function startGame() {
 
   Audio.init();
   Audio.resume();
-  ui.flashMessage("Ты очнулся... он уже ищет.", 3.5);
+  ui.flashMessage("Night-shift is over. Time to leave.", 3.5);
 
   canvasEl.requestPointerLock();
 }
 
-function die(text = "Длинные руки сомкнулись. Ты больше не увидишь неба.") {
+function die(text = "An arrow found its mark.") {
   if (game.dead) return;
   game.dead = true;
   game.running = false;
   player.state.dead = true;
-  Audio.monsterScreech();
-  Audio.stinger();
+  Audio.monsterScreech && Audio.monsterScreech();
+  Audio.stinger && Audio.stinger();
 
-  ui.showJumpscare();
-  // deactivate CCTV if on
   if (cctv.isActive) cctv.deactivate(false);
 
   setTimeout(() => {
-    ui.hideJumpscare();
     ui.showDeath(text);
     if (document.pointerLockElement) document.exitPointerLock();
-  }, 1600);
+  }, 1100);
 }
 
 function win() {
@@ -212,11 +235,6 @@ document.getElementById("startBtn").addEventListener("click", startGame);
 document.getElementById("retryBtn").addEventListener("click", startGame);
 document.getElementById("winBtn").addEventListener("click", startGame);
 
-monster.onCatch = () => die();
-
-// --------- Adaptive counters ---------
-let _wasHidden = false;
-
 // --------- Main loop ---------
 const clock = new THREE.Clock();
 
@@ -225,23 +243,39 @@ function animate() {
   requestAnimationFrame(animate);
 
   if (game.running && !game.dead && !game.escaped) {
-    // Read movement input
+    // Movement input
     player.input.forward = (keys.has("KeyW") ? 1 : 0) + (keys.has("KeyS") ? -1 : 0);
     player.input.right   = (keys.has("KeyD") ? 1 : 0) + (keys.has("KeyA") ? -1 : 0);
-
-    // Track adaptive counters
-    if (player.state.hidden && !_wasHidden) {
-      player.state.timesHidden++;
-    }
-    _wasHidden = player.state.hidden;
 
     // Player update
     player.update(dt);
 
-    // Flicker lamp lights
+    // Weapon update (reads LMB/RMB/reload + cooldown)
+    weapon.update(dt, {
+      lmb: player.input.lmb,
+      rmb: player.input.rmb,
+      reloadPressed: player.input.reloadPressed,
+    });
+    player.input.reloadPressed = false;
+
+    // Death check from taking arrow damage
+    if (player.state.dead && !game.dead) {
+      die("An arrow found its mark.");
+    }
+
+    // Arrow projectiles (may damage player)
+    arrows.update(dt);
+
+    // Skeletons AI + animation
+    skeletons.update(dt);
+
+    // Throwables (still usable for distractions, but not required)
+    throwables.update(dt, player.pos);
+
+    // Flicker lamp lights (indoor atmospheric)
     for (const f of level.flickerLights) {
-      const n = Math.sin(f.phase + performance.now() * 0.002) * 0.2
-              + Math.sin(f.phase * 3 + performance.now() * 0.011) * 0.15
+      const n = Math.sin(f.phase + performance.now() * 0.002) * 0.18
+              + Math.sin(f.phase * 3 + performance.now() * 0.011) * 0.12
               + (Math.random() < 0.003 ? -0.8 : 0);
       f.light.intensity = Math.max(0.1, f.base + n);
     }
@@ -255,39 +289,35 @@ function animate() {
       interaction.interact();
     }
 
-    // Hold-E for truck mini-game
-    if (player.input.interactHeld && interaction.truckState.active && !interaction.truckState.started) {
+    // Hold-E for truck mini-game (only when all skeletons dead)
+    if (player.input.interactHeld && interaction.truckState.active
+        && !interaction.truckState.started) {
       const t = level.truck;
       if (t && t.interactPos.distanceTo(player.pos) < 3.2) {
         interaction.holdInteract(dt);
       }
     }
 
-    // Monster AI
-    monster.update(dt);
-
-    // CCTV update
+    // CCTV update (optional)
     cctv.update(dt);
-    // If player is on CCTV but it just turned off → release immobility
     if (player.state.usingCCTV && !cctv.isActive) {
       player.state.usingCCTV = false;
-      ui.flashMessage("Монитор гаснет...");
+      ui.flashMessage("Monitor off");
     }
 
     // Truck drive-away victory cinematic
     if (interaction.truckState.started && level.truck) {
       const t = level.truck;
       game.truckDriveTimer += dt;
-      const driveSpeed = Math.min(9, game.truckDriveTimer * 3);
+      const driveSpeed = Math.min(10, game.truckDriveTimer * 3);
       t.group.position.z += driveSpeed * dt;
-      player.setPosition(t.group.position.x, 1.75, t.group.position.z - 1.1);
+      player.setPosition(t.group.position.x, 1.78, t.group.position.z - 1.1);
       player.yaw = Math.PI;
 
-      // Spawn headlight spot lights on first frame
       if (!t._headLights) {
         t._headLights = [];
         for (const hp of t.headlights) {
-          const l = new THREE.SpotLight(0xfff4c0, 3.5, 28, Math.PI / 6, 0.4, 1.0);
+          const l = new THREE.SpotLight(0xfff4c0, 2.5, 30, Math.PI / 6, 0.4, 1.0);
           l.position.set(hp.x, hp.y, hp.z);
           const tgt = new THREE.Object3D();
           tgt.position.set(hp.x, hp.y, hp.z + 12);
@@ -297,39 +327,42 @@ function animate() {
         }
       }
       for (const h of t._headLights) {
-        h.l.position.set(
-          t.group.position.x + h.baseX, 1.05,
-          t.group.position.z + 1.55
-        );
-        h.tgt.position.set(
-          t.group.position.x + h.baseX, 1.05,
-          t.group.position.z + 12
-        );
+        h.l.position.set(t.group.position.x + h.baseX, 1.05, t.group.position.z + 1.55);
+        h.tgt.position.set(t.group.position.x + h.baseX, 1.05, t.group.position.z + 12);
       }
       if (game.truckDriveTimer > 3.8) win();
     }
 
-    // Audio heartbeat / dynamic music
-    const mDist = monster.position.distanceTo(player.pos);
+    // Audio tick — adapt music to threat proximity
+    let mDist = 999;
+    for (const s of skeletons.skeletons) {
+      if (s.dead) continue;
+      const d = s.position.distanceTo(player.pos);
+      if (d < mDist) mDist = d;
+    }
+    const alert = skeletons.anyAlerted() ? 1 : 0;
+    const combat = skeletons.anyInCombat();
     Audio.tick(dt, {
       monsterDist: mDist,
-      alert: monster.alertLevel,
+      alert,
       sprinting: player.state.sprinting,
       hiding: player.state.hidden,
-      binoculars: player.state.binocularsOn,
-      chasing: monster.state === "CHASE",
+      binoculars: false,
+      chasing: combat,
     });
 
     // HUD
-    ui.update(dt, { player, monster, interaction, cctv });
+    ui.update(dt, { player, skeletons, weapon, interaction, cctv });
 
-    // Objective prompts
-    if (!interaction.truckState.active) {
-      ui.setObjective("добраться до ЖЁЛТОЙ МАШИНЫ в ангаре и уехать");
+    // Objective
+    if (skeletons.alive > 0) {
+      ui.setObjective(`eliminate ${skeletons.alive} skeleton${skeletons.alive!==1?"s":""}, then reach the yellow truck`);
+    } else if (!interaction.truckState.active) {
+      ui.setObjective("the yard is clear — reach the YELLOW TRUCK");
     } else if (!interaction.truckState.started) {
-      ui.setObjective("завести двигатель — зажать [E]");
+      ui.setObjective("start the engine — HOLD [E]");
     } else {
-      ui.setObjective("ГНАТЬ!");
+      ui.setObjective("drive!");
     }
   }
 

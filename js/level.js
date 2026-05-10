@@ -244,10 +244,10 @@ function makeBrick() {
 
 function makeGrass() {
   return canvasTex((g, w, h) => {
-    g.fillStyle = "#1a2012"; g.fillRect(0, 0, w, h);
+    g.fillStyle = "#3a4a22"; g.fillRect(0, 0, w, h);
     for (let i = 0; i < 3000; i++) {
       g.globalAlpha = 0.1 + Math.random() * 0.4;
-      g.fillStyle = ["#2a3018", "#1e2812", "#3a4020", "#0e140a"][(Math.random() * 4) | 0];
+      g.fillStyle = ["#4c5a2a", "#3a4620", "#5a6a32", "#2a3818"][(Math.random() * 4) | 0];
       g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 2, 1 + Math.random() * 2);
     }
     g.globalAlpha = 1;
@@ -256,15 +256,15 @@ function makeGrass() {
 
 function makeAsphalt() {
   return canvasTex((g, w, h) => {
-    g.fillStyle = "#1a1a1b"; g.fillRect(0, 0, w, h);
+    g.fillStyle = "#3a3a3c"; g.fillRect(0, 0, w, h);
     for (let i = 0; i < 4000; i++) {
       g.globalAlpha = 0.1 + Math.random() * 0.3;
-      g.fillStyle = ["#222", "#0a0a0a", "#2a2a28"][(Math.random() * 3) | 0];
+      g.fillStyle = ["#505052", "#2a2a2a", "#4a4a48"][(Math.random() * 3) | 0];
       g.fillRect(Math.random() * w, Math.random() * h, 1 + Math.random() * 2, 1 + Math.random() * 2);
     }
     // a faint yellow hazard stripe
-    g.globalAlpha = 0.25;
-    g.fillStyle = "#8a6a20";
+    g.globalAlpha = 0.35;
+    g.fillStyle = "#c8a020";
     g.fillRect(0, h / 2 - 2, w, 4);
     g.globalAlpha = 1;
   });
@@ -544,15 +544,21 @@ export function buildLevel(scene) {
   buildOutdoorDecor(group, metalTex, colliders, truck);
 
   // ----- Lighting -----
-  const ambient = new THREE.AmbientLight(0x3a4858, 0.45);
+  // Ambient fill (warm tone; outdoor sunny spec wants visibility outside)
+  const ambient = new THREE.AmbientLight(0x504a3e, 0.55);
   scene.add(ambient);
-  const hemi = new THREE.HemisphereLight(0x4a5a80, 0x0a0a0c, 0.45);
+  // Sky/ground hemisphere — warm sky, cool ground bounce
+  const hemi = new THREE.HemisphereLight(0xffe9bf, 0x2a1f14, 0.75);
   scene.add(hemi);
 
-  // Moon — strong dir light from above +X,+Z quadrant
-  const moon = new THREE.DirectionalLight(0x7a95c4, 0.8);
-  moon.position.set(40, 80, 30);
-  scene.add(moon);
+  // SUN — strong directional light (the user wants "солнечно" outside)
+  const sun = new THREE.DirectionalLight(0xfff2cc, 2.2);
+  sun.position.set(60, 90, 40);
+  scene.add(sun);
+  // Secondary sun fill (softens shadows and fills interior through broken ceiling)
+  const sunFill = new THREE.DirectionalLight(0xbfd6ff, 0.35);
+  sunFill.position.set(-40, 70, -30);
+  scene.add(sunFill);
 
   // Admin lamps (ceiling fluorescent)
   const flickerLights = [];
@@ -638,8 +644,9 @@ export function buildLevel(scene) {
     truck.beacon = yardLamp;
   }
 
-  // Fog
-  scene.fog = new THREE.FogExp2(0x0a0e14, 0.025);
+  // Fog — thin atmospheric haze (outdoor should still be visible per spec)
+  scene.fog = new THREE.FogExp2(0xcddae0, 0.008);
+  scene.background = new THREE.Color(0x87a8c4);
 
   // ----- CCTV camera setup (6 cams) -----
   // Placed at ceiling corners of key zones; look at key areas.
@@ -1117,44 +1124,60 @@ function buildWarehouseTopDecor(group) {
 }
 
 function buildOutdoorDecor(group, metalTex, colliders, truck) {
-  // Brick exterior wall along south face of factory (decorative pillars at fence line)
-  // Already handled by walls/fence. Add a skybox-ish dome.
+  // Bright sky dome for sunny daytime
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(180, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.SphereGeometry(200, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
     new THREE.MeshBasicMaterial({
-      color: 0x0a1018,
+      color: 0x87a8c4,
       side: THREE.BackSide,
       depthWrite: false,
     })
   );
   sky.position.y = 0;
   group.add(sky);
-  // add some faint star dots via a particle sprite
-  const starGeo = new THREE.BufferGeometry();
-  const starCount = 400;
-  const positions = new Float32Array(starCount * 3);
-  for (let i = 0; i < starCount; i++) {
-    const r = 140;
-    const th = Math.random() * Math.PI * 2;
-    const ph = Math.random() * Math.PI * 0.48 + 0.05;
-    positions[i * 3]     = Math.sin(ph) * Math.cos(th) * r;
-    positions[i * 3 + 1] = Math.cos(ph) * r;
-    positions[i * 3 + 2] = Math.sin(ph) * Math.sin(th) * r;
-  }
-  starGeo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
-    color: 0xbfd6ff, size: 0.8, sizeAttenuation: false, depthWrite: false, opacity: 0.85, transparent: true
-  }));
-  group.add(stars);
-
-  // Moon billboard
-  const moonMesh = new THREE.Mesh(
-    new THREE.CircleGeometry(2.6, 24),
-    new THREE.MeshBasicMaterial({ color: 0xc9d8ff, transparent: true, opacity: 0.9, depthWrite: false })
+  // Warm horizon gradient via a second band dome
+  const horizon = new THREE.Mesh(
+    new THREE.SphereGeometry(198, 24, 8, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.12),
+    new THREE.MeshBasicMaterial({
+      color: 0xf4cf88,
+      side: THREE.BackSide,
+      depthWrite: false,
+      transparent: true, opacity: 0.55,
+    })
   );
-  moonMesh.position.set(-60, 70, -60);
-  moonMesh.lookAt(0, 0, 0);
-  group.add(moonMesh);
+  group.add(horizon);
+
+  // Sun billboard
+  const sunMesh = new THREE.Mesh(
+    new THREE.CircleGeometry(4.2, 24),
+    new THREE.MeshBasicMaterial({ color: 0xfff6c4, transparent: true, opacity: 0.95, depthWrite: false })
+  );
+  sunMesh.position.set(60, 90, 40);
+  sunMesh.lookAt(0, 0, 0);
+  group.add(sunMesh);
+  // Sun glow halo (larger, fainter)
+  const sunHalo = new THREE.Mesh(
+    new THREE.CircleGeometry(9, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffd880, transparent: true, opacity: 0.2, depthWrite: false })
+  );
+  sunHalo.position.copy(sunMesh.position);
+  sunHalo.lookAt(0, 0, 0);
+  group.add(sunHalo);
+
+  // Soft cloud layer
+  for (let i = 0; i < 14; i++) {
+    const cloud = new THREE.Mesh(
+      new THREE.SphereGeometry(10 + Math.random() * 6, 8, 6),
+      new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0.22, depthWrite: false
+      })
+    );
+    const ang = Math.random() * Math.PI * 2;
+    const r = 90 + Math.random() * 60;
+    cloud.position.set(Math.cos(ang) * r, 60 + Math.random() * 20, Math.sin(ang) * r);
+    cloud.scale.set(1.4, 0.45, 1.0);
+    group.add(cloud);
+  }
 }
 
 function makeYellowTruck(group, x, z, metalTex, colliders) {
