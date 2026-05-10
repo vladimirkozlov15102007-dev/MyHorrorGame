@@ -474,3 +474,146 @@ class AudioEngine {
 }
 
 export const Audio = new AudioEngine();
+
+
+
+// ============== Shooter-specific audio additions ==============
+//
+// New sounds used by weapon.js / skeleton.js / arrow.js / player.js.
+// We attach them to the existing AudioEngine singleton.
+
+AudioEngine.prototype.pistolShot = function (intensity = 1.0) {
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  // Initial crack — high hiss
+  this._noiseBurst(0.05, {
+    gain: 0.6 * intensity, freq: 3800, type: "bandpass", Q: 0.8
+  });
+  // Body — mid thump
+  this._noiseBurst(0.18, {
+    gain: 0.55 * intensity, freq: 380, type: "lowpass", Q: 0.7
+  });
+  // Tail — short reverb whoosh
+  this._noiseBurst(0.45, {
+    gain: 0.22 * intensity, freq: 900, type: "bandpass", Q: 0.5
+  });
+  // Sub thump
+  const osc = this.ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(120, t0);
+  osc.frequency.exponentialRampToValueAtTime(40, t0 + 0.14);
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(0.55 * intensity, t0 + 0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.25);
+  osc.connect(g); g.connect(this.master);
+  osc.start(t0); osc.stop(t0 + 0.3);
+};
+
+AudioEngine.prototype.pistolReload = function () {
+  // Magazine release click
+  this._envBlip(1400, 0.04, { type: "triangle", gain: 0.2 });
+  // Mag drop
+  setTimeout(() => {
+    this._envBlip(220, 0.12, { type: "square", gain: 0.22,
+      filter: { type: "bandpass", freq: 600, Q: 2 } });
+  }, 250);
+  // New mag slap
+  setTimeout(() => {
+    this._envBlip(380, 0.08, { type: "square", gain: 0.3,
+      filter: { type: "bandpass", freq: 800, Q: 2 } });
+    this._noiseBurst(0.06, { gain: 0.2, freq: 2200, type: "bandpass", Q: 3 });
+  }, 1200);
+  // Slide pull/release
+  setTimeout(() => {
+    this._noiseBurst(0.25, { gain: 0.18, freq: 3500, type: "highpass", Q: 0.8 });
+  }, 1600);
+  setTimeout(() => {
+    this._envBlip(1200, 0.04, { type: "triangle", gain: 0.3 });
+    this._noiseBurst(0.05, { gain: 0.25, freq: 4000, type: "highpass" });
+  }, 1900);
+};
+
+AudioEngine.prototype.bowDraw = function () {
+  // Faint wood creak
+  if (!this.ctx) return;
+  this._envBlip(140, 0.25, { type: "triangle", gain: 0.12,
+    filter: { type: "bandpass", freq: 300, Q: 2 } });
+};
+
+AudioEngine.prototype.bowRelease = function () {
+  // String thrum + short whoosh
+  this._noiseBurst(0.12, { gain: 0.25, freq: 700, type: "bandpass", Q: 3 });
+  this._envBlip(160, 0.15, { type: "triangle", gain: 0.25 });
+  this._noiseBurst(0.3, { gain: 0.14, freq: 1400, type: "bandpass", Q: 0.5 });
+};
+
+AudioEngine.prototype.arrowHitFlesh = function () {
+  this._noiseBurst(0.12, { gain: 0.32, freq: 240, type: "lowpass", Q: 0.8 });
+  this._envBlip(90, 0.15, { type: "sawtooth", gain: 0.22 });
+};
+
+AudioEngine.prototype.arrowStick = function () {
+  this._envBlip(520, 0.1, { type: "triangle", gain: 0.2,
+    filter: { type: "bandpass", freq: 900, Q: 2 } });
+  this._noiseBurst(0.08, { gain: 0.15, freq: 2200, type: "bandpass", Q: 2 });
+};
+
+AudioEngine.prototype.skeletonHit = function () {
+  // Bone crack
+  this._envBlip(1600, 0.06, { type: "triangle", gain: 0.28,
+    filter: { type: "bandpass", freq: 1800, Q: 3 } });
+  this._noiseBurst(0.1, { gain: 0.18, freq: 3200, type: "highpass" });
+  // Pained rattle
+  this._noiseBurst(0.25, { gain: 0.16, freq: 400, type: "bandpass", Q: 1.5 });
+};
+
+AudioEngine.prototype.skeletonDie = function () {
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  // Dry bone collapse
+  this._noiseBurst(0.5, { gain: 0.3, freq: 1200, type: "bandpass", Q: 2 });
+  // Falling bones rattle
+  for (let i = 0; i < 5; i++) {
+    setTimeout(() => {
+      this._envBlip(600 + Math.random() * 400, 0.08, {
+        type: "triangle", gain: 0.18,
+        filter: { type: "bandpass", freq: 1100, Q: 4 }
+      });
+    }, 80 + i * 120);
+  }
+  // Low final thud
+  const osc = this.ctx.createOscillator();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(65, t0 + 0.5);
+  osc.frequency.exponentialRampToValueAtTime(38, t0 + 0.8);
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0.38, t0 + 0.5);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.85);
+  osc.connect(g); g.connect(this.master);
+  osc.start(t0 + 0.5); osc.stop(t0 + 0.9);
+};
+
+AudioEngine.prototype.playerHurt = function (intensity = 1.0) {
+  // Grunt + breath
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  const osc = this.ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(170 + Math.random() * 40, t0);
+  osc.frequency.exponentialRampToValueAtTime(110, t0 + 0.25);
+  const f = this.ctx.createBiquadFilter();
+  f.type = "bandpass"; f.frequency.value = 600; f.Q.value = 0.7;
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(0.35 * intensity, t0 + 0.05);
+  g.gain.linearRampToValueAtTime(0, t0 + 0.35);
+  osc.connect(f); f.connect(g); g.connect(this.master);
+  osc.start(t0); osc.stop(t0 + 0.4);
+  this._noiseBurst(0.2, { gain: 0.18 * intensity, freq: 600, type: "bandpass", Q: 0.5 });
+};
+
+AudioEngine.prototype.dryFire = function () {
+  this._envBlip(1200, 0.04, { type: "triangle", gain: 0.15 });
+  this._noiseBurst(0.04, { gain: 0.1, freq: 3500, type: "highpass" });
+};

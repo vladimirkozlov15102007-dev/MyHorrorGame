@@ -34,7 +34,8 @@ export const OUTDOOR_H = 30.0;  // "sky" height for skybox feel
 //   C crate (medium)
 //   X heavy machine (press/conveyor segment)
 //   S player spawn (security room)
-//   M monster spawn
+//   M monster spawn (legacy single)
+//   m skeleton spawn point (tactical shooter — multiple)
 //   T yellow truck spawn (outdoor)
 //   P pallet of throwables (bottles/pipes)
 //   K cctv terminal spawn (monitors desk)
@@ -52,7 +53,7 @@ const RAW = [
   "########################################################", // 0
   "#S.......#..........#...........#......................#", // 1  SEC ROOM + ADMIN
   "#........#....D.....#.......D...#..RRRRRRR..RRRRRRR....#", // 2
-  "#....D...#.l........#.l.........#..RRRRRRR..RRRRRRR....#", // 3
+  "#....D...#.l........#.l...m.....#..RRRRRRR..RRRRRRR..m.#", // 3
   "#........#..........#...........#......................#", // 4
   "#.K......#....L.....#..L........#..RRRRRRR..RRRRRRR....#", // 5
   "#........######.#####..........#...RRRRRRR..RRRRRRR....#", // 6
@@ -64,12 +65,12 @@ const RAW = [
   "#...l........HHHHHHHHHHHHHHHHH..............RRRRRRR....#", // 12
   "#............HHHHHHHHHHHHHHHHH.........................#", // 13
   "#...L........HHHHHHHHHHHHHHHHH.......P..RRRRRRR..L.....#", // 14 MAIN HALL begin
-  "#............HHHHHHHHHHHHHHHHH..........RRRRRRR........#", // 15
+  "#............HHHHHmHHHHHHHHHHH..........RRRRRRR........#", // 15
   "#............HHHHHHHHHHHHHHHHH..........RRRRRRR........#", // 16
-  "#...X........HHHHHHHHHHHHHHHHH..........RRRRRRR........#", // 17
+  "#...X........HHHHHHHHHHHmHHHHH..........RRRRRRR..m.....#", // 17
   "#............HHHHHHHHHHHHHHHHH...........WWWWW.........#", // 18
   "#............HHHHHHHHHHHHHHHHH...........WWWWW..L......#", // 19
-  "#.....l......HHHHHMHHHHHHHHHHH...........WWWWW.........#", // 20
+  "#.....l......HHHHHHHHHHHHHHHHH...........WWWWW.........#", // 20
   "#............HHHHHHHHHHHHHHHHH...........WWWWW.........#", // 21
   "#............HHHHHHHHHHHHHHHHH...........WWWWW.........#", // 22
   "#....X.......HHHHHHHHHHHHHHHHH...........WWWWW.....P...#", // 23
@@ -77,18 +78,18 @@ const RAW = [
   "#............HHHHHHHHHHHHHHHHH.........................#", // 25
   "#....L.......HHHHHHHHHHHHHHHHH.....L....RRRRRRR...L....#", // 26
   "#............HHHHHHHHHHHHHHHHH..........RRRRRRR........#", // 27
-  "#.....X......HHHHHHHHHHHHHHHHH..........RRRRRRR........#", // 28
+  "#.....X......HHHHHHHHHmHHHHHHH..........RRRRRRR..m.....#", // 28
   "#............HHHHHHHHHHHHHHHHH..........RRRRRRR........#", // 29 MAIN HALL end
   "###.################.################...RRRRRRR........#", // 30
   "#....................................vvvvvvvvvvv.......#", // 31  VENT corridor
-  "#...vvvvvvvvvvvvvvvv..L.......P......vvvvvvvvvvv.L.....#", // 32
+  "#...vvvvvvvvvvvvvvvv..L.......P..m...vvvvvvvvvvv.L.....#", // 32
   "#...vvvvvvvvvvvvvvvv..................................#", // 33
   "####.######################ggggggggggg#################", // 34  garage shutters
   "=OOOOOOOOOOOOOOOOOOOOOOOOOOggggggggggg=OOOOOOOOOOOOOOOO=", // 35  OUTDOOR yard begins
-  "=OOOOOcOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO=OOOOOcOOOOOOOOO=", // 36
+  "=OOOOOcOOOOOOOOOOOOOOOOmOOOOOOOOOOOOOOO=OOOOOcOOOOOOOOO=", // 36
   "=OOOOOOOOOOOOOObOOOOOOOOOOOOOOOOOOOOOOO=OOOOOOOOOOOOOOO=", // 37
   "=OOOOOOOOOOOOOOOOOOOOOOOOOOTOOOOOOOOOOO=OOOOOcOOOOOOOOO=", // 38
-  "=OOOOOcOOOOOOOObOOOOOOOOOOOOOOOOOOOOOOO=OOOOOOOOOOOOOOO=", // 39
+  "=OOOOOcOOOOOOOObOOOOOOOOOOOOOOOOOOOOOOO=OOOOOOOOmOOOOOO=", // 39
   "=OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO=OOOOOOOOOOOOOOO=", // 40
   "=OOOOOOOOOOOOOOOOOOOOOOOOOOOObOOOOOOOOO=OOOOOcOOOOOOOOO=", // 41
   "=OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO=OOOOOOOOOOOOOOO=", // 42
@@ -286,10 +287,37 @@ export function buildLevel(scene) {
   };
   let playerSpawn = { x: 0, y: 1.65, z: 0 };
   let monsterSpawn = { x: 0, y: 0, z: 0 };
+  const skeletonSpawns = [];
   let truck = null;
 
   const walk = Array.from({ length: H }, () => Array(W).fill(false));
   const zoneMap = Array.from({ length: H }, () => Array(W).fill("."));
+
+  // Pre-pass: collect skeleton spawns ('m') and rewrite those cells to
+  // inherit their zone character from a walkable neighbor (so floor materials
+  // + ceiling heights remain correct).
+  for (let cy = 0; cy < H; cy++) {
+    let row = ROWS[cy];
+    if (row.indexOf("m") === -1) continue;
+    const arr = row.split("");
+    for (let cx = 0; cx < W; cx++) {
+      if (arr[cx] !== "m") continue;
+      const { x, z } = cellToWorld(cx, cy);
+      skeletonSpawns.push({ x, y: 0, z });
+      // inherit from a passable neighbor that isn't 'm'
+      let inherit = ".";
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]]) {
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const nc = ROWS[ny][nx];
+        if (nc === "#" || nc === "=" || nc === "m") continue;
+        inherit = nc;
+        break;
+      }
+      arr[cx] = inherit;
+    }
+    ROWS[cy] = arr.join("");
+  }
 
   // classify cells
   for (let cy = 0; cy < H; cy++) {
@@ -544,15 +572,24 @@ export function buildLevel(scene) {
   buildOutdoorDecor(group, metalTex, colliders, truck);
 
   // ----- Lighting -----
-  const ambient = new THREE.AmbientLight(0x3a4858, 0.45);
+  // Per spec: outdoors should read as sunlit/brightly moonlit with strong
+  // fill from the sky, so detail reads clearly across the yard.  Indoors the
+  // local lamps carry the mood.
+  const ambient = new THREE.AmbientLight(0x5a6a82, 0.75);
   scene.add(ambient);
-  const hemi = new THREE.HemisphereLight(0x4a5a80, 0x0a0a0c, 0.45);
+  const hemi = new THREE.HemisphereLight(0x8aa6d8, 0x2a251e, 0.95);
   scene.add(hemi);
 
-  // Moon — strong dir light from above +X,+Z quadrant
-  const moon = new THREE.DirectionalLight(0x7a95c4, 0.8);
-  moon.position.set(40, 80, 30);
+  // "Sun" (cold moonlight pretending to be low sun) — strong directional light
+  const moon = new THREE.DirectionalLight(0xf0eac8, 2.4);
+  moon.position.set(60, 90, 40);
+  moon.castShadow = false; // keep perf for big scene
   scene.add(moon);
+
+  // Secondary cool fill light from opposite side
+  const fillLight = new THREE.DirectionalLight(0x6a8cc4, 0.55);
+  fillLight.position.set(-40, 60, -30);
+  scene.add(fillLight);
 
   // Admin lamps (ceiling fluorescent)
   const flickerLights = [];
@@ -638,8 +675,8 @@ export function buildLevel(scene) {
     truck.beacon = yardLamp;
   }
 
-  // Fog
-  scene.fog = new THREE.FogExp2(0x0a0e14, 0.025);
+  // Fog — thinner so outdoor yard stays readable; indoors still feels misty.
+  scene.fog = new THREE.FogExp2(0x14202c, 0.011);
 
   // ----- CCTV camera setup (6 cams) -----
   // Placed at ceiling corners of key zones; look at key areas.
@@ -692,6 +729,19 @@ export function buildLevel(scene) {
     const w1 = cellToWorld(W - 4, 4);
     monsterSpawn = { x: w1.x, y: 0, z: w1.z };
   }
+  // If we somehow have fewer than 10 skeleton spawns, auto-scatter the rest
+  // onto random walkable cells far from the player spawn.
+  while (skeletonSpawns.length < 10) {
+    const cell = pathfinder.randomWalkable();
+    const w = cellToWorld(cell.cx, cell.cy);
+    const d = Math.hypot(w.x - playerSpawn.x, w.z - playerSpawn.z);
+    if (d > 14) {
+      skeletonSpawns.push({ x: w.x, y: 0, z: w.z });
+    } else {
+      // try again
+    }
+    if (skeletonSpawns.length > 20) break;  // safety
+  }
 
   return {
     group,
@@ -702,6 +752,7 @@ export function buildLevel(scene) {
     truck,
     playerSpawn,
     monsterSpawn,
+    skeletonSpawns,
     walk, zoneMap,
     W, H,
     CELL, WALL_H, HALL_H, WAREHOUSE_H,
@@ -1120,11 +1171,39 @@ function buildOutdoorDecor(group, metalTex, colliders, truck) {
   // Brick exterior wall along south face of factory (decorative pillars at fence line)
   // Already handled by walls/fence. Add a skybox-ish dome.
   const sky = new THREE.Mesh(
-    new THREE.SphereGeometry(180, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
-    new THREE.MeshBasicMaterial({
-      color: 0x0a1018,
+    new THREE.SphereGeometry(180, 32, 20, 0, Math.PI * 2, 0, Math.PI / 2),
+    new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
+      uniforms: {
+        topColor: { value: new THREE.Color(0x0a1226) },
+        horizonColor: { value: new THREE.Color(0x3a5278) },
+        sunColor: { value: new THREE.Color(0x94aacc) },
+        sunDir: { value: new THREE.Vector3(60, 90, 40).normalize() },
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vWorldPos;
+        uniform vec3 topColor;
+        uniform vec3 horizonColor;
+        uniform vec3 sunColor;
+        uniform vec3 sunDir;
+        void main() {
+          vec3 dir = normalize(vWorldPos);
+          float h = clamp(dir.y, 0.0, 1.0);
+          vec3 col = mix(horizonColor, topColor, pow(h, 0.6));
+          float sunDot = max(0.0, dot(dir, normalize(sunDir)));
+          col += sunColor * pow(sunDot, 18.0) * 1.4;
+          col += sunColor * pow(sunDot, 3.0) * 0.08;
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `,
     })
   );
   sky.position.y = 0;
@@ -1149,12 +1228,20 @@ function buildOutdoorDecor(group, metalTex, colliders, truck) {
 
   // Moon billboard
   const moonMesh = new THREE.Mesh(
-    new THREE.CircleGeometry(2.6, 24),
-    new THREE.MeshBasicMaterial({ color: 0xc9d8ff, transparent: true, opacity: 0.9, depthWrite: false })
+    new THREE.CircleGeometry(3.2, 32),
+    new THREE.MeshBasicMaterial({ color: 0xd8e4ff, transparent: true, opacity: 0.92, depthWrite: false })
   );
-  moonMesh.position.set(-60, 70, -60);
+  moonMesh.position.set(62, 72, 42);
   moonMesh.lookAt(0, 0, 0);
   group.add(moonMesh);
+  // Moon halo
+  const moonHalo = new THREE.Mesh(
+    new THREE.CircleGeometry(5.5, 24),
+    new THREE.MeshBasicMaterial({ color: 0x94aacc, transparent: true, opacity: 0.18, depthWrite: false })
+  );
+  moonHalo.position.copy(moonMesh.position).multiplyScalar(0.99);
+  moonHalo.lookAt(0, 0, 0);
+  group.add(moonHalo);
 }
 
 function makeYellowTruck(group, x, z, metalTex, colliders) {

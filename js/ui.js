@@ -1,77 +1,159 @@
-// HUD / overlay management.
+// Tactical shooter HUD.
+//
+// Shows: HP bar, stamina bar, ammo counter (mag / reserve), reload bar,
+// skeleton kill counter (10 pips), directional damage indicators,
+// hitmarker, objective text, interact prompts, overlays (start/death/win/jumpscare),
+// ADS vignette + mode tag, crosshair that widens with weapon spread.
 
 export class UI {
   constructor() {
+    // HP / stamina
+    this.hpFill = document.getElementById("hpFill");
+    this.hpNumber = document.getElementById("hpNumber");
     this.staminaFill = document.getElementById("staminaFill");
-    this.slotBino    = document.getElementById("slotBino");
-    this.slotHeld    = document.getElementById("slotHeld");
-    this.slotCCTV    = document.getElementById("slotCCTV");
-    this.zoomReadout = document.getElementById("zoomReadout");
-    this.aimBar      = document.getElementById("aimBar");
-    this.aimFill     = document.getElementById("aimFill");
-    this.prompt      = document.getElementById("prompt");
-    this.subtitle    = document.getElementById("subtitle");
-    this.damageFlash = document.getElementById("damageFlash");
-    this.binoOverlay = document.getElementById("binocularOverlay");
-    this.objective   = document.getElementById("objective");
-    this.monsterState = document.getElementById("monsterState");
-    this.distBar     = document.getElementById("distBar");
-    this.distFill    = document.getElementById("distFill");
 
+    // Ammo
+    this.ammoMag = document.getElementById("ammoMag");
+    this.ammoReserve = document.getElementById("ammoReserve");
+    this.reloadBar = document.getElementById("reloadBar");
+    this.reloadFill = document.getElementById("reloadFill");
+    this.modeTag = document.getElementById("modeTag");
+
+    // Skeleton pips
+    this.skelBar = document.getElementById("skeletonBar");
+    this.skelCount = document.getElementById("skeletonCount");
+    this._builtPips = false;
+    this._pips = [];
+
+    // Objective / prompt / subtitle
+    this.objective = document.getElementById("objective");
+    this.prompt = document.getElementById("prompt");
+    this.subtitle = document.getElementById("subtitle");
+
+    // Damage
+    this.damageRing = document.getElementById("damageRing");
+
+    // Hitmarker
+    this.hitmarker = document.getElementById("hitmarker");
+    this._buildHitmarker();
+    this._hitmarkerT = 0;
+
+    // ADS / crosshair
+    this.adsVignette = document.getElementById("adsVignette");
+    this.crosshair = document.getElementById("crosshair");
+
+    // Overlays
     this.startScreen = document.getElementById("startScreen");
     this.deathScreen = document.getElementById("deathScreen");
     this.winScreen   = document.getElementById("winScreen");
     this.jumpscare   = document.getElementById("jumpscare");
     this.deathText   = document.getElementById("deathText");
 
+    // Legacy slots
+    this.slotHeld = document.getElementById("slotHeld");
+    this.slotCCTV = document.getElementById("slotCCTV");
+
     this._subtitleTimer = 0;
-    this._pulseTimer = 0;
   }
 
-  update(dt, { player, monster, interaction, cctv }) {
-    // Stamina bar
-    const sPct = Math.max(0, Math.min(1, player.state.stamina));
-    this.staminaFill.style.width = (sPct * 100).toFixed(1) + "%";
+  _buildHitmarker() {
+    if (!this.hitmarker) return;
+    this.hitmarker.innerHTML = "";
+    for (const c of ["tl", "tr", "bl", "br"]) {
+      const s = document.createElement("span");
+      s.className = `hm-line ${c}`;
+      this.hitmarker.appendChild(s);
+    }
+  }
 
-    // Binocular slot active while held
-    this.slotBino.classList.toggle("active", player.state.binocularsOn);
-    this.zoomReadout.textContent = player.state.binocularsOn
-      ? `ZOOM ${player.state.binocZoom.toFixed(1)}x` : "";
+  ensurePips(count) {
+    if (this._builtPips) return;
+    if (!this.skelBar) return;
+    this.skelBar.innerHTML = "";
+    this._pips = [];
+    for (let i = 0; i < count; i++) {
+      const p = document.createElement("span");
+      p.className = "skel-pip";
+      this.skelBar.appendChild(p);
+      this._pips.push(p);
+    }
+    this._builtPips = true;
+  }
 
-    // Held item slot
-    const held = player.state.held;
-    if (held) {
-      this.slotHeld.classList.add("active");
-      this.slotHeld.textContent = labelFor(held.kind) + " · LMB THROW";
+  update(dt, ctx) {
+    const { player, weapon, interaction, cctv, skeletons } = ctx;
+
+    // ---- HP ----
+    const hp = Math.max(0, Math.round(player.state.health));
+    this.hpNumber.textContent = hp;
+    this.hpFill.style.width = (hp) + "%";
+    if (hp < 30) this.hpFill.classList.add("critical");
+    else this.hpFill.classList.remove("critical");
+
+    // ---- Stamina ----
+    this.staminaFill.style.width = Math.max(0, Math.min(1, player.state.stamina)) * 100 + "%";
+
+    // ---- Ammo ----
+    this.ammoMag.textContent = weapon.magazine;
+    this.ammoReserve.textContent = weapon.reserve;
+    this.ammoMag.classList.toggle("empty", weapon.magazine === 0);
+    this.ammoMag.classList.toggle("low", weapon.magazine > 0 && weapon.magazine <= 3);
+
+    // Reload bar
+    if (weapon._reloading) {
+      this.reloadBar.classList.add("on");
+      const t = 1 - (weapon._reloadT / 2.0);
+      this.reloadFill.style.width = (t * 100).toFixed(0) + "%";
     } else {
-      this.slotHeld.classList.remove("active");
-      this.slotHeld.textContent = "Empty hand";
+      this.reloadBar.classList.remove("on");
+      this.reloadFill.style.width = "0%";
     }
 
-    // CCTV status slot
-    if (cctv.isActive) {
-      this.slotCCTV.classList.add("active");
-      this.slotCCTV.textContent = `CCTV · ${cctv.timeLeft.toFixed(0)}s`;
-    } else if (cctv.inCooldown) {
-      this.slotCCTV.classList.remove("active");
-      this.slotCCTV.textContent = `CCTV · cool ${cctv.cooldownLeft.toFixed(0)}s`;
+    // Mode tag
+    if (weapon.aiming) {
+      this.modeTag.textContent = "ADS";
+      this.modeTag.classList.add("ads");
     } else {
-      this.slotCCTV.classList.remove("active");
-      this.slotCCTV.textContent = `CCTV · READY`;
+      this.modeTag.textContent = "HIP";
+      this.modeTag.classList.remove("ads");
     }
 
-    // Aim bar
-    if (player.state.aiming && held) {
-      this.aimBar.classList.add("on");
-      this.aimFill.style.width = (player.state.aimPower * 100) + "%";
-    } else {
-      this.aimBar.classList.remove("on");
+    // ADS vignette + crosshair
+    this.adsVignette.classList.toggle("on", weapon.aiming);
+    this.crosshair.classList.toggle("ads", weapon.aiming);
+    // Crosshair widens with spread
+    const spread = weapon.getCrosshairSpread ? weapon.getCrosshairSpread() : 0.04;
+    const size = 20 + spread * 700;
+    this.crosshair.style.width = size + "px";
+    this.crosshair.style.height = size + "px";
+
+    // ---- Skeleton pips ----
+    if (skeletons && skeletons.members) {
+      this.ensurePips(skeletons.members.length);
+      let alive = 0;
+      for (let i = 0; i < skeletons.members.length; i++) {
+        const p = this._pips[i];
+        if (!p) continue;
+        const isDead = !skeletons.members[i].alive;
+        p.classList.toggle("dead", isDead);
+        if (!isDead) alive++;
+      }
+      this.skelCount.textContent = `${alive} / ${skeletons.members.length}`;
     }
 
-    // Binocular overlay
-    this.binoOverlay.classList.toggle("on", player.state.binocularsOn);
+    // ---- Damage indicators ----
+    this._updateDamageArrows(player);
 
-    // Prompt
+    // ---- Hitmarker ----
+    if (this._hitmarkerT > 0) {
+      this._hitmarkerT -= dt;
+      if (this._hitmarkerT <= 0) {
+        this.hitmarker.classList.remove("on");
+        this.hitmarker.classList.remove("crit");
+      }
+    }
+
+    // ---- Interact prompt ----
     const cur = interaction.current;
     if (cur) {
       this.prompt.textContent = cur.label + this._truckProgressText(interaction);
@@ -83,25 +165,60 @@ export class UI {
       this.prompt.classList.remove("on");
     }
 
-    // Tension vignette
-    const dist = monster.position.distanceTo(player.pos);
-    const tension = Math.max(monster.alertLevel, Math.max(0, 1 - dist / 8));
-    this._pulseTimer += dt * (1 + tension * 4);
-    const pulse = (Math.sin(this._pulseTimer * 6) * 0.5 + 0.5) * tension;
-    this.damageFlash.style.background = `radial-gradient(ellipse at center, rgba(120,0,0,0) ${30 - pulse * 15}%, rgba(180,0,0,${0.05 + pulse * 0.5}) 100%)`;
-
-    // Monster state debug (small)
-    if (this.monsterState) {
-      this.monsterState.textContent = `${monster.state}  ·  ${dist.toFixed(1)}m`;
-    }
-    if (this.distFill) {
-      this.distFill.style.width = Math.max(0, Math.min(1, 1 - dist / 50)) * 100 + "%";
+    // ---- CCTV slot ----
+    if (cctv.isActive) {
+      this.slotCCTV.classList.add("active");
+      this.slotCCTV.textContent = `CCTV · ${cctv.timeLeft.toFixed(0)}s`;
+    } else if (cctv.inCooldown) {
+      this.slotCCTV.classList.remove("active");
+      this.slotCCTV.textContent = `CCTV · cool ${cctv.cooldownLeft.toFixed(0)}s`;
+    } else {
+      this.slotCCTV.classList.remove("active");
+      this.slotCCTV.textContent = `CCTV · READY`;
     }
 
+    // Held slot (throwable)
+    if (player.state.held) {
+      this.slotHeld.classList.add("active");
+      this.slotHeld.textContent = (player.state.held.kind || "ITEM").toUpperCase();
+    } else {
+      this.slotHeld.classList.remove("active");
+      this.slotHeld.textContent = "рука пуста";
+    }
+
+    // Subtitle timer
     if (this._subtitleTimer > 0) {
       this._subtitleTimer -= dt;
       if (this._subtitleTimer <= 0) this.subtitle.classList.remove("on");
     }
+  }
+
+  _updateDamageArrows(player) {
+    const dirs = player.state.damageDirs || [];
+    // Clear and rebuild quickly
+    this.damageRing.innerHTML = "";
+    for (const d of dirs) {
+      if (d.age >= d.life) continue;
+      const fade = 1 - (d.age / d.life);
+      const wrap = document.createElement("div");
+      wrap.className = "dmg-arrow";
+      // Convert to CSS: 0 rad = up (north). angle is relative to player facing.
+      const deg = (d.angle * 180 / Math.PI);
+      wrap.style.transform = `translate(-50%, -50%) rotate(${deg}deg)`;
+      const inner = document.createElement("div");
+      inner.className = "arrow-inner";
+      inner.style.opacity = (0.3 + fade * 0.7).toFixed(2);
+      wrap.appendChild(inner);
+      this.damageRing.appendChild(wrap);
+    }
+  }
+
+  showHitmarker(zone) {
+    if (!this.hitmarker) return;
+    this.hitmarker.classList.add("on");
+    if (zone === "head") this.hitmarker.classList.add("crit");
+    else this.hitmarker.classList.remove("crit");
+    this._hitmarkerT = 0.14;
   }
 
   _truckProgressText(inter) {
@@ -130,7 +247,7 @@ export class UI {
   hideStart() { this.startScreen.classList.add("hidden"); }
 
   showDeath(text) {
-    this.deathText.textContent = text;
+    if (text) this.deathText.textContent = text;
     this.deathScreen.classList.remove("hidden");
   }
   hideDeath() { this.deathScreen.classList.add("hidden"); }
@@ -140,15 +257,4 @@ export class UI {
 
   showJumpscare() { this.jumpscare.classList.remove("hidden"); }
   hideJumpscare() { this.jumpscare.classList.add("hidden"); }
-}
-
-function labelFor(kind) {
-  switch (kind) {
-    case "bottle": return "BOTTLE";
-    case "pipe":   return "PIPE";
-    case "nut":    return "NUT";
-    case "can":    return "CAN";
-    case "rebar":  return "REBAR";
-  }
-  return (kind || "ITEM").toUpperCase();
 }
