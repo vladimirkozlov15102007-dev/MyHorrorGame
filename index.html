@@ -10,50 +10,81 @@
   <div id="game">
     <canvas id="canvas"></canvas>
 
-    <!-- Vignette / damage overlay -->
+    <!-- Vignette / damage overlay (the PostFX shader also contributes) -->
     <div id="vignette"></div>
     <div id="damageFlash"></div>
 
-    <!-- Binocular overlay -->
-    <div id="binocularOverlay">
-      <div class="bino-ring"></div>
-      <div class="bino-rangefinder"></div>
-      <div class="bino-reticle"></div>
-      <div class="bino-cross"></div>
-      <div id="zoomReadout" class="bino-readout"></div>
-      <div class="bino-scan"></div>
-    </div>
+    <!-- ADS dark vignette that tightens when aiming -->
+    <div id="adsVignette"></div>
 
-    <!-- HUD -->
+    <!-- Directional damage indicators (arrows pointing toward attacker) -->
+    <div id="damageRing"></div>
+
+    <!-- Hitmarker (flashes on hitting a skeleton) -->
+    <div id="hitmarker"></div>
+
+    <!-- Main HUD -->
     <div id="hud">
-      <div id="crosshair">·</div>
+      <!-- Dynamic crosshair -->
+      <div id="crosshair">
+        <span class="ch-t"></span>
+        <span class="ch-l"></span>
+        <span class="ch-r"></span>
+        <span class="ch-b"></span>
+        <span class="ch-dot"></span>
+      </div>
 
-      <!-- Aim power bar -->
-      <div id="aimBar"><div id="aimFill"></div><span class="aim-label">POWER</span></div>
+      <!-- Interact prompt / status -->
+      <div id="prompt"></div>
+      <div id="subtitle"></div>
 
-      <div id="bottomBar">
-        <div class="stat">
-          <div class="label">STAMINA</div>
-          <div class="bar"><div id="staminaFill" class="fill green"></div></div>
-        </div>
-        <div class="stat">
-          <div class="label">MONSTER</div>
-          <div class="bar"><div id="distFill" class="fill red"></div></div>
-          <div id="monsterState" class="sub"></div>
-        </div>
-        <div id="inventory">
-          <div id="slotBino"  class="slot">[SHIFT] Binoculars</div>
-          <div id="slotHeld"  class="slot">Empty hand</div>
-          <div id="slotCCTV"  class="slot">CCTV · READY</div>
+      <!-- Top-right: Objective + skeleton counter -->
+      <div id="topRight">
+        <div id="objective">Objective: eliminate threats</div>
+        <div id="threatPanel">
+          <div class="threat-title">ВРАГИ</div>
+          <div id="skeletonBar"></div>
+          <div id="skeletonCount">10 / 10</div>
         </div>
       </div>
 
-      <div id="prompt"></div>
-      <div id="subtitle"></div>
-      <div id="objective">Objective: reach the YELLOW TRUCK and escape the factory</div>
+      <!-- Bottom-left: HP + stamina -->
+      <div id="bottomLeft">
+        <div class="stat-block">
+          <div class="stat-row">
+            <span class="stat-label">HP</span>
+            <div class="bar big"><div id="hpFill" class="fill red"></div></div>
+            <span id="hpNumber" class="stat-num">100</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-label">STAM</span>
+            <div class="bar"><div id="staminaFill" class="fill green"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom-right: Weapon / ammo -->
+      <div id="bottomRight">
+        <div class="weapon-block">
+          <div class="weapon-name">P-9 PISTOL</div>
+          <div class="ammo-row">
+            <span id="ammoMag" class="ammo-mag">15</span>
+            <span class="ammo-slash">/</span>
+            <span id="ammoReserve" class="ammo-reserve">60</span>
+          </div>
+          <div id="reloadBar"><div id="reloadFill"></div></div>
+          <div id="modeTag">HIP</div>
+        </div>
+      </div>
+
+      <!-- Bottom center (tertiary slots for legacy mechanics) -->
+      <div id="bottomCenter">
+        <div id="slotHeld"  class="slot">рука пуста</div>
+        <div id="slotCCTV"  class="slot">CCTV · READY</div>
+      </div>
     </div>
 
-    <!-- CCTV overlay (the security room monitor view) -->
+    <!-- CCTV overlay (legacy) -->
     <div id="cctvOverlay" class="hidden">
       <div id="cctvFrame">
         <div id="cctvHeader">
@@ -71,18 +102,20 @@
     <div id="startScreen" class="overlay">
       <div class="panel">
         <h1>OLD AMBER FACTORY</h1>
-        <p class="tag">Заброшенный завод «Янтарь». Что-то в темноте учится. Добраться до Жёлтой Машины.</p>
+        <p class="tag">Заброшенный завод «Янтарь». 10 оживших скелетов-лучников бродят между конвейерами. Уничтожь всех, заведи жёлтый грузовик и уезжай.</p>
         <div class="controls">
           <div><b>WASD</b> — движение</div>
-          <div><b>X</b> — бег (громко)</div>
-          <div><b>Ctrl</b> — присесть (тихо)</div>
-          <div><b>Shift (зажать)</b> — бинокль</div>
-          <div><b>Колесо мыши</b> — зум бинокля 1x..8x</div>
-          <div><b>E</b> — взаимодействие / прятаться</div>
-          <div><b>ЛКМ (зажать+отпустить)</b> — прицел и бросок</div>
+          <div><b>Shift</b> — бег</div>
+          <div><b>Space</b> — прыжок</div>
+          <div><b>Ctrl</b> — присесть</div>
+          <div><b>ЛКМ</b> — стрельба</div>
+          <div><b>ПКМ</b> — прицеливание (ADS)</div>
+          <div><b>R</b> — перезарядка</div>
+          <div><b>E</b> — взаимодействие / грузовик</div>
           <div><b>Q</b> — выбросить предмет</div>
+          <div><b>Мышь</b> — обзор</div>
         </div>
-        <p class="warn">Монстр адаптируется под твой стиль. Прячешься — проверит шкафы. Бегаешь — догонит. Шумишь — придёт.</p>
+        <p class="warn">Стрелы бьют больно. В голову — 30. Тело — 20. Ноги — 10. Скелеты учатся твоим манёврам и обходят.</p>
         <button id="startBtn">ВОЙТИ ВО ТЬМУ</button>
       </div>
     </div>
@@ -90,8 +123,8 @@
     <!-- Death screen -->
     <div id="deathScreen" class="overlay hidden">
       <div class="panel dark">
-        <h1 class="blood">ОН ДОБРАЛСЯ ДО ТЕБЯ</h1>
-        <p id="deathText" class="tag">Длинные руки сомкнулись. Ты больше не увидишь неба.</p>
+        <h1 class="blood">ТЫ МЁРТВ</h1>
+        <p id="deathText" class="tag">Стрелы нашли свой дом.</p>
         <button id="retryBtn">ЕЩЁ РАЗ</button>
       </div>
     </div>
@@ -100,12 +133,12 @@
     <div id="winScreen" class="overlay hidden">
       <div class="panel">
         <h1 class="yellow">ДВИГАТЕЛЬ РЫЧИТ</h1>
-        <p class="tag">Фары прорезают туман. Ты уезжаешь и не оборачиваешься.</p>
+        <p class="tag">Все десять скелетов лежат в пыли. Фары прорезают туман. Ты уезжаешь и не оборачиваешься.</p>
         <button id="winBtn">СЫГРАТЬ ЕЩЁ</button>
       </div>
     </div>
 
-    <!-- Jumpscare overlay -->
+    <!-- Jumpscare overlay (death effect) -->
     <div id="jumpscare" class="hidden">
       <div class="face"></div>
       <div class="jumpscare-fx"></div>

@@ -13,155 +13,122 @@ html, body {
 #game { position: fixed; inset: 0; }
 #canvas { display: block; width: 100%; height: 100%; }
 
-/* Vignette */
+/* ---------- Global vignette ---------- */
 #vignette {
   position: absolute; inset: 0;
   pointer-events: none;
   background: radial-gradient(
     ellipse at center,
     rgba(0,0,0,0) 40%,
-    rgba(0,0,0,0.55) 75%,
-    rgba(0,0,0,0.95) 100%
+    rgba(0,0,0,0.40) 80%,
+    rgba(0,0,0,0.85) 100%
   );
   mix-blend-mode: multiply;
   z-index: 10;
 }
 
-/* Red tension pulse */
+/* Red tension pulse (PostFX also handles this inside the shader, this is CSS UI flash) */
 #damageFlash {
   position: absolute; inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at center, rgba(120,0,0,0) 40%, rgba(140,0,0,0) 100%);
+  background: radial-gradient(ellipse at center, rgba(140,0,0,0) 30%, rgba(140,0,0,0) 100%);
   z-index: 11;
-  transition: background 0.2s;
+  transition: background 0.25s;
 }
 
-/* --- Binocular overlay (no flashlight; visible while Shift held) --- */
-#binocularOverlay {
+/* ADS vignette — tightens when aiming */
+#adsVignette {
   position: absolute; inset: 0;
-  pointer-events: none; z-index: 12;
-  display: none;
+  pointer-events: none;
+  z-index: 12;
+  opacity: 0;
+  transition: opacity 0.15s linear;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 30%,
+    rgba(0,0,0,0.35) 45%,
+    rgba(0,0,0,0.85) 80%
+  );
 }
-#binocularOverlay.on { display: block; }
+#adsVignette.on { opacity: 1; }
 
-/* Twin-circle mask */
-#binocularOverlay::before,
-#binocularOverlay::after {
-  content: "";
+/* ---------- Directional damage indicators ---------- */
+#damageRing {
   position: absolute; inset: 0;
-  background: #000;
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+  pointer-events: none;
+  z-index: 15;
 }
-#binocularOverlay::before {
-  background: radial-gradient(circle at 50% 50%, transparent 0 42vh, #000 43vh);
-}
-/* subtle lens vignette */
-#binocularOverlay .bino-ring {
-  position: absolute; left: 50%; top: 50%;
-  width: 84vh; height: 84vh;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  box-shadow:
-    0 0 40px 10px rgba(0,0,0,0.8) inset,
-    0 0 200px 50px rgba(0,0,0,0.8) inset;
+.dmg-arrow {
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 96px; height: 96px;
+  transform-origin: center center;
   pointer-events: none;
 }
-#binocularOverlay .bino-reticle {
-  position: absolute; left: 50%; top: 50%;
-  width: 2px; height: 80px;
-  background: rgba(140,0,0,0.55);
-  transform: translate(-50%, -50%);
-}
-#binocularOverlay .bino-cross {
-  position: absolute; left: 50%; top: 50%;
-  width: 80px; height: 2px;
-  background: rgba(140,0,0,0.55);
-  transform: translate(-50%, -50%);
-}
-#binocularOverlay .bino-rangefinder {
-  position: absolute; left: 50%; top: 50%;
-  width: 36vh; height: 36vh;
-  border: 1px solid rgba(140,0,0,0.25);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 10px rgba(0,0,0,0.6) inset;
-}
-#binocularOverlay .bino-scan {
-  position: absolute; inset: 0;
-  background: repeating-linear-gradient(
-    to bottom,
-    rgba(10,30,10,0.0) 0 2px,
-    rgba(10,30,10,0.25) 2px 3px
-  );
-  mix-blend-mode: multiply;
-}
-#binocularOverlay .bino-readout {
+.dmg-arrow .arrow-inner {
   position: absolute;
-  left: 56%; top: calc(50% + 18vh);
-  color: rgba(140,0,0,0.8);
-  font-size: 12px; letter-spacing: 3px;
+  left: 50%;
+  top: -140px;
+  width: 40px; height: 32px;
+  transform: translate(-50%, 0);
+  background:
+    linear-gradient(to bottom, rgba(255,0,0,0.9), rgba(255,0,0,0));
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  filter: drop-shadow(0 0 8px rgba(255,40,0,0.6));
 }
 
-/* --- HUD --- */
+/* ---------- Hitmarker ---------- */
+#hitmarker {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 26px; height: 26px;
+  pointer-events: none;
+  z-index: 24;
+  opacity: 0;
+  transition: opacity 0.06s linear;
+}
+#hitmarker.on { opacity: 1; }
+#hitmarker.crit .hm-line { background: #ff2a2a; box-shadow: 0 0 6px #ff2a2a; }
+#hitmarker .hm-line {
+  position: absolute;
+  background: #ffffff;
+  box-shadow: 0 0 4px #ffffff;
+  width: 9px; height: 2px;
+}
+#hitmarker .hm-line.tl { transform: translate(-11px, -11px) rotate(45deg); }
+#hitmarker .hm-line.tr { transform: translate(11px, -11px) rotate(-45deg); }
+#hitmarker .hm-line.bl { transform: translate(-11px, 11px) rotate(-45deg); }
+#hitmarker .hm-line.br { transform: translate(11px, 11px) rotate(45deg); }
+
+/* ---------- HUD ---------- */
 #hud { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
+
+/* Crosshair — 4 ticks + dot */
 #crosshair {
   position: absolute; left: 50%; top: 50%;
   transform: translate(-50%, -50%);
-  font-size: 22px; color: rgba(220,220,220,0.6);
-  text-shadow: 0 0 4px black;
+  width: 36px; height: 36px;
+  pointer-events: none;
+  transition: transform 0.1s ease-out;
 }
+#crosshair span {
+  position: absolute;
+  background: rgba(230,230,230,0.85);
+  box-shadow: 0 0 3px rgba(0,0,0,0.9);
+}
+#crosshair .ch-t { left: 50%; top: 0;    width: 2px; height: 8px; transform: translateX(-50%); }
+#crosshair .ch-b { left: 50%; bottom: 0; width: 2px; height: 8px; transform: translateX(-50%); }
+#crosshair .ch-l { left: 0;   top: 50%;  width: 8px; height: 2px; transform: translateY(-50%); }
+#crosshair .ch-r { right: 0;  top: 50%;  width: 8px; height: 2px; transform: translateY(-50%); }
+#crosshair .ch-dot {
+  left: 50%; top: 50%;
+  width: 2px; height: 2px; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255,255,255,0.9);
+}
+#crosshair.ads span { opacity: 0.35; }
 
-/* Aim power bar */
-#aimBar {
-  position: absolute; left: 50%; top: 58%;
-  transform: translateX(-50%);
-  width: 220px; height: 10px;
-  background: rgba(0,0,0,0.55);
-  border: 1px solid #3a2a1a;
-  display: none;
-}
-#aimBar.on { display: block; }
-#aimBar #aimFill {
-  height: 100%; width: 0%;
-  background: linear-gradient(to right, #f4d35e, #e35a1a);
-  transition: width 0.05s linear;
-}
-#aimBar .aim-label {
-  position: absolute; right: -60px; top: -2px;
-  color: #e3a61c; font-size: 11px; letter-spacing: 2px;
-}
-
-#bottomBar {
-  position: absolute; bottom: 18px; left: 18px; right: 18px;
-  display: flex; gap: 22px; align-items: flex-end;
-  font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
-  color: #a8a8a8; text-shadow: 0 0 4px black;
-}
-.stat { min-width: 180px; }
-.stat .label { margin-bottom: 4px; opacity: 0.7; }
-.stat .sub { opacity: 0.6; margin-top: 2px; font-size: 10px; }
-.bar {
-  width: 180px; height: 8px;
-  background: rgba(30,30,30,0.7);
-  border: 1px solid #333;
-  overflow: hidden;
-}
-.fill { width: 100%; height: 100%; transition: width 0.15s linear; background: #c9a227; }
-.fill.green { background: #3b8a3b; }
-.fill.red   { background: #8a1010; }
-
-#inventory { margin-left: auto; display: flex; gap: 10px; }
-.slot {
-  padding: 6px 10px;
-  border: 1px solid #333;
-  background: rgba(0,0,0,0.5);
-  font-size: 12px; letter-spacing: 1px; color: #888;
-}
-.slot.active {
-  color: #f4d35e; border-color: #6b5a1e;
-  box-shadow: 0 0 10px rgba(244,211,94,0.25);
-}
-
+/* Prompt */
 #prompt {
   position: absolute; left: 50%; top: 58%;
   transform: translateX(-50%);
@@ -175,22 +142,185 @@ html, body {
 
 #subtitle {
   position: absolute;
-  bottom: 110px; left: 50%;
+  bottom: 140px; left: 50%;
   transform: translateX(-50%);
-  color: #9a9a9a; font-style: italic; text-shadow: 0 0 4px black;
+  color: #c6c6c6; font-style: italic; text-shadow: 0 0 4px black;
   max-width: 60vw; text-align: center;
   opacity: 0; transition: opacity 0.4s;
+  font-size: 14px; letter-spacing: 1px;
 }
 #subtitle.on { opacity: 1; }
 
-#objective {
+/* ---------- Top Right ---------- */
+#topRight {
   position: absolute;
-  top: 14px; left: 14px;
-  font-size: 12px; letter-spacing: 1px; color: #b9a04a; text-shadow: 0 0 4px black;
-  opacity: 0.85;
+  top: 14px; right: 14px;
+  width: 280px;
+  display: flex; flex-direction: column;
+  gap: 10px;
+  text-align: right;
+}
+#objective {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #e3c44a;
+  text-shadow: 0 0 5px black, 0 0 10px rgba(0,0,0,0.8);
+  padding: 6px 10px;
+  background: rgba(0,0,0,0.55);
+  border-right: 3px solid #c9a227;
+  line-height: 1.3;
+}
+#threatPanel {
+  background: rgba(0,0,0,0.6);
+  border: 1px solid #3a1c1c;
+  padding: 8px 10px;
+  box-shadow: 0 0 12px rgba(160,0,0,0.15);
+}
+.threat-title {
+  font-size: 10px; letter-spacing: 3px;
+  color: #a85050;
+  margin-bottom: 5px;
+}
+#skeletonBar {
+  display: flex; gap: 3px;
+  justify-content: flex-end;
+}
+.skel-pip {
+  width: 18px; height: 8px;
+  background: #a81818;
+  box-shadow: 0 0 4px rgba(180,0,0,0.5) inset;
+}
+.skel-pip.dead {
+  background: #1a1a1a;
+  box-shadow: 0 0 2px rgba(80,0,0,0.2) inset;
+  position: relative;
+}
+.skel-pip.dead::after {
+  content: "";
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(45deg, transparent 45%, #3a0000 46%, #3a0000 54%, transparent 55%);
+}
+#skeletonCount {
+  margin-top: 5px;
+  font-size: 14px; letter-spacing: 2px;
+  color: #e08080;
 }
 
-/* --- CCTV overlay (security room) --- */
+/* ---------- Bottom Left (HP, Stamina) ---------- */
+#bottomLeft {
+  position: absolute;
+  left: 20px; bottom: 20px;
+  min-width: 260px;
+}
+.stat-block {
+  background: rgba(0,0,0,0.55);
+  border-left: 3px solid #a01010;
+  padding: 8px 12px 10px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.stat-row {
+  display: flex; align-items: center; gap: 8px;
+  color: #b5b5b5; font-size: 11px; letter-spacing: 2px;
+}
+.stat-label { width: 40px; color: #888; text-align: left; }
+.stat-num {
+  width: 42px; text-align: right;
+  color: #e6e6e6;
+  font-size: 14px; letter-spacing: 1px;
+}
+.bar {
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: rgba(30,30,30,0.8);
+  border: 1px solid #333;
+  overflow: hidden;
+}
+.bar.big { height: 12px; }
+.fill {
+  width: 100%; height: 100%;
+  transition: width 0.2s linear;
+  background: #c9a227;
+}
+.fill.green { background: linear-gradient(to top, #2a6a30, #4a9a4a); }
+.fill.red { background: linear-gradient(to top, #8a0a0a, #d02828); box-shadow: 0 0 10px rgba(255,40,40,0.2) inset; }
+.fill.red.critical { animation: hpPulse 0.8s infinite; }
+@keyframes hpPulse {
+  0%,100% { filter: brightness(1.0); }
+  50% { filter: brightness(1.6); }
+}
+
+/* ---------- Bottom Right (Weapon) ---------- */
+#bottomRight {
+  position: absolute;
+  right: 20px; bottom: 20px;
+  text-align: right;
+}
+.weapon-block {
+  background: rgba(0,0,0,0.55);
+  border-right: 3px solid #c9a227;
+  padding: 8px 14px 10px;
+  min-width: 180px;
+}
+.weapon-name {
+  font-size: 10px; letter-spacing: 3px;
+  color: #7a7a7a;
+  margin-bottom: 4px;
+}
+.ammo-row {
+  display: flex; justify-content: flex-end; align-items: baseline; gap: 4px;
+}
+.ammo-mag {
+  font-size: 32px; font-weight: bold;
+  color: #f4d35e;
+  text-shadow: 0 0 8px rgba(244,211,94,0.4);
+}
+.ammo-mag.low { color: #ff5a3a; text-shadow: 0 0 10px rgba(255,80,50,0.4); }
+.ammo-mag.empty { color: #5a5a5a; text-shadow: none; }
+.ammo-slash { font-size: 18px; color: #5a5a5a; }
+.ammo-reserve { font-size: 16px; color: #a88a40; }
+#modeTag {
+  margin-top: 4px;
+  font-size: 10px; letter-spacing: 3px;
+  color: #888;
+  text-align: right;
+}
+#modeTag.ads { color: #4cff6a; }
+#reloadBar {
+  margin-top: 6px;
+  width: 100%; height: 3px;
+  background: rgba(30,30,30,0.8);
+  border: 1px solid #333;
+  display: none;
+}
+#reloadBar.on { display: block; }
+#reloadFill {
+  height: 100%; width: 0%;
+  background: #e3c44a;
+  box-shadow: 0 0 6px rgba(244,211,94,0.6);
+}
+
+/* ---------- Bottom Center (secondary slots) ---------- */
+#bottomCenter {
+  position: absolute;
+  bottom: 22px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; gap: 10px;
+  font-size: 11px;
+}
+.slot {
+  padding: 5px 10px;
+  border: 1px solid #333;
+  background: rgba(0,0,0,0.5);
+  letter-spacing: 1px; color: #888;
+}
+.slot.active {
+  color: #f4d35e; border-color: #6b5a1e;
+  box-shadow: 0 0 10px rgba(244,211,94,0.25);
+}
+
+/* ---------- CCTV overlay ---------- */
 #cctvOverlay {
   position: absolute; inset: 0;
   background: #000;
@@ -223,7 +353,6 @@ html, body {
 .cctv-status.cooldown { color: #ff6a4c; }
 .cctv-status.ready { color: #c9ff4c; }
 #cctvHeader .cctv-hint { margin-left: auto; color: #3a6a3a; }
-
 #cctvGrid {
   display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr;
   gap: 10px;
@@ -236,8 +365,7 @@ html, body {
   box-shadow: 0 0 30px rgba(0,100,0,0.1) inset;
 }
 .cctv-canvas {
-  width: 100% !important;
-  height: 100% !important;
+  width: 100% !important; height: 100% !important;
   display: block;
   filter: brightness(1.05) contrast(1.05) saturate(0.4) sepia(0.15);
 }
@@ -248,8 +376,7 @@ html, body {
     rgba(0,255,0,0.0) 0 2px,
     rgba(0,80,0,0.22) 2px 3px
   );
-  pointer-events: none;
-  mix-blend-mode: multiply;
+  pointer-events: none; mix-blend-mode: multiply;
 }
 .cctv-static {
   position: absolute; inset: 0;
@@ -295,14 +422,13 @@ html, body {
   text-shadow: 0 0 3px #000;
 }
 @keyframes recBlink { 50% { opacity: 0.3; } }
-
 .cctv-noise {
   position: absolute; inset: 34px 0 0 0;
   pointer-events: none;
   background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.6) 100%);
 }
 
-/* --- Overlays (start/death/win) --- */
+/* ---------- Overlays ---------- */
 .overlay {
   position: absolute; inset: 0;
   background: radial-gradient(ellipse at center, #0a0a0a 0%, #000 80%);
@@ -314,7 +440,7 @@ html, body {
   background: rgba(10,10,10,0.88);
   border: 1px solid #2a2a2a;
   padding: 36px 46px;
-  max-width: 560px;
+  max-width: 620px;
   text-align: center;
   box-shadow: 0 0 50px rgba(0,0,0,0.9);
 }
@@ -324,7 +450,7 @@ html, body {
 }
 .panel .blood { color: #8a1010; text-shadow: 0 0 14px rgba(180,0,0,0.6); }
 .panel .yellow { color: #f4d35e; }
-.panel .tag { font-size: 13px; color: #9a9a9a; margin-bottom: 22px; font-style: italic; }
+.panel .tag { font-size: 13px; color: #9a9a9a; margin-bottom: 22px; font-style: italic; line-height: 1.5; }
 .controls {
   display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px;
   text-align: left; font-size: 12px; color: #b5b5b5; margin-bottom: 20px;
@@ -341,7 +467,7 @@ button:hover {
   box-shadow: 0 0 12px rgba(244,211,94,0.3);
 }
 
-/* --- Jumpscare --- */
+/* ---------- Jumpscare ---------- */
 #jumpscare {
   position: absolute; inset: 0;
   background: black;
