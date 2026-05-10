@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>The Yellow Truck — Horror</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="game">
+    <canvas id="canvas"></canvas>
+
+    <!-- Vignette / damage overlay -->
+    <div id="vignette"></div>
+    <div id="damageFlash"></div>
+    <div id="binocularOverlay">
+      <div class="reticle"></div>
+    </div>
+
+    <!-- HUD -->
+    <div id="hud">
+      <div id="crosshair">·</div>
+
+      <div id="bottomBar">
+        <div class="stat">
+          <div class="label">BATTERY</div>
+          <div class="bar"><div id="batteryFill" class="fill"></div></div>
+        </div>
+        <div class="stat">
+          <div class="label">STAMINA</div>
+          <div class="bar"><div id="staminaFill" class="fill green"></div></div>
+        </div>
+        <div id="inventory">
+          <div id="slotFlash" class="slot active">F · Flashlight</div>
+          <div id="slotBino"  class="slot">B · Binoculars</div>
+          <div id="slotKeys"  class="slot">Keys: <span id="keyCount">0/3</span></div>
+        </div>
+      </div>
+
+      <div id="prompt"></div>
+      <div id="subtitle"></div>
+      <div id="objective">Objective: find truck keys, reach the YELLOW TRUCK, escape.</div>
+    </div>
+
+    <!-- Start screen -->
+    <div id="startScreen" class="overlay">
+      <div class="panel">
+        <h1>THE YELLOW TRUCK</h1>
+        <p class="tag">You woke up in an abandoned factory. Something is already hunting.</p>
+        <div class="controls">
+          <div><b>WASD</b> — move</div>
+          <div><b>Shift</b> — run (loud)</div>
+          <div><b>Ctrl</b> — crouch (quiet)</div>
+          <div><b>F</b> — flashlight</div>
+          <div><b>B</b> — binoculars (slow, deaf)</div>
+          <div><b>E</b> — interact / hide / exit locker</div>
+          <div><b>Mouse</b> — look</div>
+        </div>
+        <p class="warn">Find 3 KEYS, reach the yellow truck in the garage, survive the start sequence.</p>
+        <button id="startBtn">ENTER THE DARK</button>
+      </div>
+    </div>
+
+    <!-- Death screen -->
+    <div id="deathScreen" class="overlay hidden">
+      <div class="panel dark">
+        <h1 class="blood">YOU WERE TAKEN</h1>
+        <p id="deathText" class="tag">The long arms close around you. You never saw the sky again.</p>
+        <button id="retryBtn">TRY AGAIN</button>
+      </div>
+    </div>
+
+    <!-- Win screen -->
+    <div id="winScreen" class="overlay hidden">
+      <div class="panel">
+        <h1 class="yellow">ENGINE ROARS</h1>
+        <p class="tag">The headlights cut through the fog. You drive, and you do not look back.</p>
+        <button id="winBtn">PLAY AGAIN</button>
+      </div>
+    </div>
+
+    <!-- Jumpscare overlay (death cutscene) -->
+    <div id="jumpscare" class="hidden">
+      <div class="face"></div>
+    </div>
+  </div>
+
+  <!-- Three.js via import map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
