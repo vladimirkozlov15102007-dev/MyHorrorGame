@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>Old Amber Factory — The Yellow Truck</title>
+  <title>Old Amber Factory — Tactical Survival Horror</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -10,50 +10,73 @@
   <div id="game">
     <canvas id="canvas"></canvas>
 
-    <!-- Vignette / damage overlay -->
+    <!-- Scope / post effects -->
     <div id="vignette"></div>
     <div id="damageFlash"></div>
+    <div id="bloodOverlay"></div>
 
-    <!-- Binocular overlay -->
-    <div id="binocularOverlay">
-      <div class="bino-ring"></div>
-      <div class="bino-rangefinder"></div>
-      <div class="bino-reticle"></div>
-      <div class="bino-cross"></div>
-      <div id="zoomReadout" class="bino-readout"></div>
-      <div class="bino-scan"></div>
+    <!-- Directional damage indicators (8 arrows) -->
+    <div id="dmgIndicators">
+      <div class="dmg-arrow" data-dir="0"></div>
+      <div class="dmg-arrow" data-dir="45"></div>
+      <div class="dmg-arrow" data-dir="90"></div>
+      <div class="dmg-arrow" data-dir="135"></div>
+      <div class="dmg-arrow" data-dir="180"></div>
+      <div class="dmg-arrow" data-dir="225"></div>
+      <div class="dmg-arrow" data-dir="270"></div>
+      <div class="dmg-arrow" data-dir="315"></div>
     </div>
+
+    <!-- ADS / hit marker overlay -->
+    <div id="adsOverlay"></div>
 
     <!-- HUD -->
     <div id="hud">
-      <div id="crosshair">·</div>
+      <div id="crosshair">
+        <div class="cross-line t"></div>
+        <div class="cross-line b"></div>
+        <div class="cross-line l"></div>
+        <div class="cross-line r"></div>
+        <div class="cross-dot"></div>
+      </div>
+      <div id="hitmarker"></div>
 
-      <!-- Aim power bar -->
-      <div id="aimBar"><div id="aimFill"></div><span class="aim-label">POWER</span></div>
+      <div id="topBar">
+        <div id="killCounter">
+          <div class="kill-label">SKELETONS</div>
+          <div class="kill-value"><span id="killsLeft">10</span> / 10</div>
+        </div>
+        <div id="objective">Objective: find the YELLOW TRUCK — eliminate the threat — escape</div>
+      </div>
 
       <div id="bottomBar">
+        <div class="stat hp-stat">
+          <div class="label">HEALTH</div>
+          <div class="bar big"><div id="hpFill" class="fill hp"></div></div>
+          <span id="hpValue" class="stat-value">100</span>
+        </div>
         <div class="stat">
           <div class="label">STAMINA</div>
           <div class="bar"><div id="staminaFill" class="fill green"></div></div>
         </div>
-        <div class="stat">
-          <div class="label">MONSTER</div>
-          <div class="bar"><div id="distFill" class="fill red"></div></div>
-          <div id="monsterState" class="sub"></div>
-        </div>
-        <div id="inventory">
-          <div id="slotBino"  class="slot">[SHIFT] Binoculars</div>
-          <div id="slotHeld"  class="slot">Empty hand</div>
-          <div id="slotCCTV"  class="slot">CCTV · READY</div>
+
+        <div id="ammoPanel">
+          <div class="ammo-weapon">PISTOL · MAK-9</div>
+          <div class="ammo-numbers">
+            <span id="ammoMag" class="ammo-mag">12</span>
+            <span class="ammo-sep">/</span>
+            <span id="ammoRes" class="ammo-res">48</span>
+          </div>
+          <div id="reloadBar"><div id="reloadFill"></div></div>
         </div>
       </div>
 
       <div id="prompt"></div>
       <div id="subtitle"></div>
-      <div id="objective">Objective: reach the YELLOW TRUCK and escape the factory</div>
+      <div id="threatHud"><span id="threatLabel">THREAT</span><span id="threatValue">CLEAR</span></div>
     </div>
 
-    <!-- CCTV overlay (the security room monitor view) -->
+    <!-- CCTV overlay (security room) -->
     <div id="cctvOverlay" class="hidden">
       <div id="cctvFrame">
         <div id="cctvHeader">
@@ -71,18 +94,23 @@
     <div id="startScreen" class="overlay">
       <div class="panel">
         <h1>OLD AMBER FACTORY</h1>
-        <p class="tag">Заброшенный завод «Янтарь». Что-то в темноте учится. Добраться до Жёлтой Машины.</p>
+        <p class="subtitle2">Заброшенный завод «Янтарь» · Tactical Survival Horror</p>
+        <p class="tag">Ты просыпаешься ночью на огромном промышленном объекте.
+          Скрипят цепи. Шепчется ветер в трубах.
+          Где-то в темноте десять древних стрелков уже наблюдают за тобой.
+          Найди Жёлтый грузовик. Выживи. Убей всех. Уезжай.</p>
         <div class="controls">
           <div><b>WASD</b> — движение</div>
-          <div><b>X</b> — бег (громко)</div>
-          <div><b>Ctrl</b> — присесть (тихо)</div>
-          <div><b>Shift (зажать)</b> — бинокль</div>
-          <div><b>Колесо мыши</b> — зум бинокля 1x..8x</div>
-          <div><b>E</b> — взаимодействие / прятаться</div>
-          <div><b>ЛКМ (зажать+отпустить)</b> — прицел и бросок</div>
-          <div><b>Q</b> — выбросить предмет</div>
+          <div><b>Shift</b> — бег</div>
+          <div><b>Space</b> — прыжок</div>
+          <div><b>Ctrl</b> — присесть</div>
+          <div><b>ЛКМ</b> — выстрел</div>
+          <div><b>ПКМ</b> — прицеливание</div>
+          <div><b>R</b> — перезарядка</div>
+          <div><b>E</b> — взаимодействие</div>
         </div>
-        <p class="warn">Монстр адаптируется под твой стиль. Прячешься — проверит шкафы. Бегаешь — догонит. Шумишь — придёт.</p>
+        <p class="warn">Головa — 30 урона · Корпус — 20 · Ноги — 10.  То же работает и против тебя.</p>
+        <p class="warn">10 скелетов координируются, устраивают засады, флангуют и учатся твоему стилю игры.</p>
         <button id="startBtn">ВОЙТИ ВО ТЬМУ</button>
       </div>
     </div>
@@ -90,8 +118,8 @@
     <!-- Death screen -->
     <div id="deathScreen" class="overlay hidden">
       <div class="panel dark">
-        <h1 class="blood">ОН ДОБРАЛСЯ ДО ТЕБЯ</h1>
-        <p id="deathText" class="tag">Длинные руки сомкнулись. Ты больше не увидишь неба.</p>
+        <h1 class="blood">YOU DIED</h1>
+        <p id="deathText" class="tag">Костяной наконечник прошёл сквозь рёбра.</p>
         <button id="retryBtn">ЕЩЁ РАЗ</button>
       </div>
     </div>
@@ -99,8 +127,9 @@
     <!-- Win screen -->
     <div id="winScreen" class="overlay hidden">
       <div class="panel">
-        <h1 class="yellow">ДВИГАТЕЛЬ РЫЧИТ</h1>
-        <p class="tag">Фары прорезают туман. Ты уезжаешь и не оборачиваешься.</p>
+        <h1 class="yellow">ENGINE ROARS</h1>
+        <p class="tag">Фары прорезают туман. Завод Янтарь остаётся позади.
+          Десять скелетов лежат разбросанными костями на бетоне.</p>
         <button id="winBtn">СЫГРАТЬ ЕЩЁ</button>
       </div>
     </div>

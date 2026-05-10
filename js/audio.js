@@ -474,3 +474,216 @@ class AudioEngine {
 }
 
 export const Audio = new AudioEngine();
+
+
+// ============================================================================
+// Tactical-shooter sound extensions — attached to AudioEngine prototype.
+// These replace/augment the original horror-only palette so the gunplay,
+// skeleton archers, bow, arrows and player damage cues work properly.
+// ============================================================================
+
+AudioEngine.prototype.pistolShot = function (ads = false) {
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  // 1) Sharp crack (high-freq noise burst through resonant bandpass)
+  const crackSrc = this.ctx.createBufferSource();
+  crackSrc.buffer = this._makeNoiseBuffer(0.12);
+  const bp = this.ctx.createBiquadFilter();
+  bp.type = "bandpass"; bp.frequency.value = 2400; bp.Q.value = 1.8;
+  const hp = this.ctx.createBiquadFilter();
+  hp.type = "highpass"; hp.frequency.value = 900;
+  const crackG = this.ctx.createGain();
+  crackG.gain.setValueAtTime(0, t0);
+  crackG.gain.linearRampToValueAtTime(ads ? 0.55 : 0.75, t0 + 0.003);
+  crackG.gain.exponentialRampToValueAtTime(0.001, t0 + 0.10);
+  crackSrc.connect(bp); bp.connect(hp); hp.connect(crackG); crackG.connect(this.master);
+  crackSrc.start(t0); crackSrc.stop(t0 + 0.14);
+
+  // 2) Body punch (low sub thump)
+  const punch = this.ctx.createOscillator();
+  punch.type = "sine"; punch.frequency.setValueAtTime(220, t0);
+  punch.frequency.exponentialRampToValueAtTime(55, t0 + 0.09);
+  const punchG = this.ctx.createGain();
+  punchG.gain.setValueAtTime(0.6, t0);
+  punchG.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+  punch.connect(punchG); punchG.connect(this.master);
+  punch.start(t0); punch.stop(t0 + 0.14);
+
+  // 3) Tail / echo slap — filtered noise with delay-ish decay
+  const tailSrc = this.ctx.createBufferSource();
+  tailSrc.buffer = this._makeNoiseBuffer(0.3);
+  const tailBp = this.ctx.createBiquadFilter();
+  tailBp.type = "bandpass"; tailBp.frequency.value = 1400; tailBp.Q.value = 0.6;
+  const tailG = this.ctx.createGain();
+  tailG.gain.setValueAtTime(0, t0);
+  tailG.gain.linearRampToValueAtTime(0.18, t0 + 0.04);
+  tailG.gain.exponentialRampToValueAtTime(0.001, t0 + 0.42);
+  tailSrc.connect(tailBp); tailBp.connect(tailG); tailG.connect(this.master);
+  tailSrc.start(t0 + 0.02); tailSrc.stop(t0 + 0.45);
+};
+
+AudioEngine.prototype.pistolDryFire = function () {
+  // Short dry click
+  this._envBlip(3200, 0.02, { type: "square", gain: 0.18 });
+  this._noiseBurst(0.04, { gain: 0.1, freq: 5000, type: "highpass", Q: 0.8 });
+};
+
+AudioEngine.prototype.pistolReloadStart = function () {
+  // Mag release click
+  this._envBlip(2400, 0.04, { type: "triangle", gain: 0.18 });
+};
+
+AudioEngine.prototype.pistolMagIn = function () {
+  // Magazine seat — low thunk
+  this._envBlip(150, 0.18, { type: "triangle", gain: 0.25, filter: { type: "lowpass", freq: 500 } });
+  this._noiseBurst(0.08, { gain: 0.15, freq: 1800, type: "bandpass", Q: 2 });
+};
+
+AudioEngine.prototype.pistolSlide = function () {
+  // Slide racked: metal zip + hard clack
+  this._noiseBurst(0.12, { gain: 0.24, freq: 2800, type: "bandpass", Q: 1.4 });
+  setTimeout(() => {
+    if (!this.ctx) return;
+    this._envBlip(360, 0.05, { type: "square", gain: 0.18,
+      filter: { type: "bandpass", freq: 1800, Q: 4 } });
+  }, 80);
+};
+
+AudioEngine.prototype.shellTink = function () {
+  this._envBlip(2400, 0.07, { type: "triangle", gain: 0.12,
+    filter: { type: "bandpass", freq: 2600, Q: 7 } });
+  this._envBlip(1600, 0.08, { type: "triangle", gain: 0.08,
+    filter: { type: "bandpass", freq: 1800, Q: 6 } });
+};
+
+AudioEngine.prototype.bulletImpactWall = function (intensity = 1.0) {
+  // Short dusty thud + high-freq zing
+  this._noiseBurst(0.08, { gain: 0.22 * intensity, freq: 700, type: "lowpass", Q: 0.6 });
+  this._noiseBurst(0.12, { gain: 0.1 * intensity, freq: 4800, type: "highpass", Q: 1.5 });
+};
+
+AudioEngine.prototype.playerHurt = function (intensity = 1.0) {
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  // Pained grunt
+  const osc = this.ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(180 + Math.random() * 40, t0);
+  osc.frequency.exponentialRampToValueAtTime(90, t0 + 0.35);
+  const f = this.ctx.createBiquadFilter();
+  f.type = "bandpass"; f.frequency.value = 600; f.Q.value = 1.2;
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(0.38 * intensity, t0 + 0.04);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.42);
+  osc.connect(f); f.connect(g); g.connect(this.master);
+  osc.start(t0); osc.stop(t0 + 0.5);
+  // Thick low stinger
+  this._noiseBurst(0.25, { gain: 0.25 * intensity, freq: 180, type: "lowpass", Q: 0.5 });
+};
+
+AudioEngine.prototype.jump = function () {
+  this._envBlip(400, 0.08, { type: "triangle", gain: 0.12,
+    filter: { type: "bandpass", freq: 1400, Q: 0.8 } });
+};
+
+AudioEngine.prototype.land = function (intensity = 1.0) {
+  this._noiseBurst(0.16, { gain: 0.22 * intensity, freq: 220, type: "lowpass", Q: 0.5 });
+  this._envBlip(90, 0.14, { type: "sine", gain: 0.15 * intensity });
+};
+
+AudioEngine.prototype.arrowWhoosh = function () {
+  // Sharp swooshing "fwip" on release plus low rumble of draw
+  this._noiseBurst(0.28, { gain: 0.22, freq: 1800, type: "bandpass", Q: 0.9 });
+  this._envBlip(900, 0.12, { type: "sawtooth", gain: 0.08,
+    filter: { type: "lowpass", freq: 2000 } });
+};
+
+AudioEngine.prototype.arrowImpactFlesh = function () {
+  // Wet thud — low band + hf click
+  this._noiseBurst(0.18, { gain: 0.4, freq: 320, type: "lowpass", Q: 0.6 });
+  this._envBlip(110, 0.18, { type: "sine", gain: 0.32 });
+  this._envBlip(1800, 0.04, { type: "triangle", gain: 0.1 });
+};
+
+AudioEngine.prototype.arrowImpactMetal = function () {
+  this._envBlip(2200, 0.25, { type: "triangle", gain: 0.28,
+    filter: { type: "bandpass", freq: 2400, Q: 6 } });
+  this._noiseBurst(0.18, { gain: 0.18, freq: 3200, type: "highpass", Q: 1.2 });
+};
+
+AudioEngine.prototype.arrowImpactWood = function () {
+  this._envBlip(420, 0.25, { type: "triangle", gain: 0.24,
+    filter: { type: "bandpass", freq: 900, Q: 3 } });
+  this._noiseBurst(0.2, { gain: 0.14, freq: 1200, type: "bandpass", Q: 0.8 });
+};
+
+AudioEngine.prototype.bowRelease = function () {
+  // Taut string snap
+  this._envBlip(280, 0.10, { type: "triangle", gain: 0.14,
+    filter: { type: "bandpass", freq: 700, Q: 4 } });
+  this._envBlip(780, 0.14, { type: "sine", gain: 0.1,
+    filter: { type: "bandpass", freq: 1200, Q: 3 } });
+  this._noiseBurst(0.08, { gain: 0.12, freq: 2200, type: "highpass", Q: 0.8 });
+};
+
+AudioEngine.prototype.skeletonBoneHit = function (intensity = 1.0) {
+  // Bullet shattering bone — sharp crack + bone resonance
+  this._envBlip(1400, 0.16, { type: "triangle", gain: 0.3 * intensity,
+    filter: { type: "bandpass", freq: 2000, Q: 6 } });
+  this._noiseBurst(0.1, { gain: 0.18 * intensity, freq: 4500, type: "highpass", Q: 1.2 });
+  this._envBlip(180, 0.12, { type: "sawtooth", gain: 0.14 * intensity,
+    filter: { type: "lowpass", freq: 480 } });
+};
+
+AudioEngine.prototype.skeletonDeath = function () {
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  // Hollow groan + bone collapse
+  const osc = this.ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(110, t0);
+  osc.frequency.exponentialRampToValueAtTime(40, t0 + 0.9);
+  const f = this.ctx.createBiquadFilter();
+  f.type = "lowpass"; f.frequency.value = 500;
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(0.32, t0 + 0.1);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.9);
+  osc.connect(f); f.connect(g); g.connect(this.master);
+  osc.start(t0); osc.stop(t0 + 0.95);
+  // Multiple bone clunks afterwards
+  for (let i = 0; i < 4; i++) {
+    setTimeout(() => this.boneRattle(), 200 + i * 120 + Math.random() * 80);
+  }
+};
+
+AudioEngine.prototype.skeletonShriek = function () {
+  if (!this.ctx) return;
+  const t0 = this.ctx.currentTime;
+  const dur = 0.9;
+  const osc = this.ctx.createOscillator();
+  osc.type = "sawtooth";
+  osc.frequency.setValueAtTime(800, t0);
+  osc.frequency.exponentialRampToValueAtTime(260, t0 + dur);
+  const f = this.ctx.createBiquadFilter();
+  f.type = "bandpass"; f.frequency.value = 900; f.Q.value = 3;
+  const g = this.ctx.createGain();
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(0.35, t0 + 0.08);
+  g.gain.linearRampToValueAtTime(0, t0 + dur);
+  osc.connect(f); f.connect(g); g.connect(this.master);
+  osc.start(t0); osc.stop(t0 + dur + 0.05);
+  this._noiseBurst(dur * 0.7, { gain: 0.14, freq: 2400, type: "bandpass", Q: 2 });
+};
+
+AudioEngine.prototype.boneRattle = function () {
+  // Two quick bone clunks
+  this._envBlip(600 + Math.random() * 200, 0.09, { type: "triangle", gain: 0.14,
+    filter: { type: "bandpass", freq: 1400, Q: 5 } });
+  setTimeout(() => {
+    if (!this.ctx) return;
+    this._envBlip(480 + Math.random() * 200, 0.08, { type: "triangle", gain: 0.11,
+      filter: { type: "bandpass", freq: 1100, Q: 5 } });
+  }, 70 + Math.random() * 80);
+};

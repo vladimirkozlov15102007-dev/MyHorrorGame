@@ -1,23 +1,43 @@
-// HUD / overlay management.
+// HUD / overlay manager for the tactical survival-horror game.
+
+import * as THREE from "three";
 
 export class UI {
   constructor() {
+    // Stat bars
+    this.hpFill = document.getElementById("hpFill");
+    this.hpValue = document.getElementById("hpValue");
     this.staminaFill = document.getElementById("staminaFill");
-    this.slotBino    = document.getElementById("slotBino");
-    this.slotHeld    = document.getElementById("slotHeld");
-    this.slotCCTV    = document.getElementById("slotCCTV");
-    this.zoomReadout = document.getElementById("zoomReadout");
-    this.aimBar      = document.getElementById("aimBar");
-    this.aimFill     = document.getElementById("aimFill");
-    this.prompt      = document.getElementById("prompt");
-    this.subtitle    = document.getElementById("subtitle");
-    this.damageFlash = document.getElementById("damageFlash");
-    this.binoOverlay = document.getElementById("binocularOverlay");
-    this.objective   = document.getElementById("objective");
-    this.monsterState = document.getElementById("monsterState");
-    this.distBar     = document.getElementById("distBar");
-    this.distFill    = document.getElementById("distFill");
 
+    // Ammo panel
+    this.ammoMag = document.getElementById("ammoMag");
+    this.ammoRes = document.getElementById("ammoRes");
+    this.reloadBar = document.getElementById("reloadBar");
+    this.reloadFill = document.getElementById("reloadFill");
+
+    // Kill counter
+    this.killsLeft = document.getElementById("killsLeft");
+
+    // Threat
+    this.threatValue = document.getElementById("threatValue");
+
+    // Prompt / subtitle / objective
+    this.prompt = document.getElementById("prompt");
+    this.subtitle = document.getElementById("subtitle");
+    this.objective = document.getElementById("objective");
+
+    // Damage overlays
+    this.damageFlash = document.getElementById("damageFlash");
+    this.bloodOverlay = document.getElementById("bloodOverlay");
+    this.dmgArrows = Array.from(document.querySelectorAll(".dmg-arrow"));
+    this._dmgArrowTimers = this.dmgArrows.map(() => 0);
+
+    // ADS + crosshair + hit marker
+    this.adsOverlay = document.getElementById("adsOverlay");
+    this.crosshair = document.getElementById("crosshair");
+    this.hitmarker = document.getElementById("hitmarker");
+
+    // Overlays
     this.startScreen = document.getElementById("startScreen");
     this.deathScreen = document.getElementById("deathScreen");
     this.winScreen   = document.getElementById("winScreen");
@@ -26,78 +46,126 @@ export class UI {
 
     this._subtitleTimer = 0;
     this._pulseTimer = 0;
+    this._lastHp = 100;
+    this._damageFlashTimer = 0;
+    this._hitmarkerTimer = 0;
   }
 
-  update(dt, { player, monster, interaction, cctv }) {
-    // Stamina bar
+  update(dt, { player, skeletons, weapon, interaction, cctv }) {
+    // HP
+    const hp = Math.max(0, Math.round(player.state.hp));
+    if (this.hpValue) this.hpValue.textContent = hp;
+    if (this.hpFill) this.hpFill.style.width = Math.max(0, (hp / 100) * 100) + "%";
+    if (hp < this._lastHp) {
+      this._damageFlashTimer = 0.6;
+    }
+    this._lastHp = hp;
+
+    // Blood on lens at low HP
+    if (this.bloodOverlay) {
+      this.bloodOverlay.classList.toggle("on", hp < 40);
+    }
+
+    // Stamina
     const sPct = Math.max(0, Math.min(1, player.state.stamina));
-    this.staminaFill.style.width = (sPct * 100).toFixed(1) + "%";
+    if (this.staminaFill) this.staminaFill.style.width = (sPct * 100).toFixed(1) + "%";
 
-    // Binocular slot active while held
-    this.slotBino.classList.toggle("active", player.state.binocularsOn);
-    this.zoomReadout.textContent = player.state.binocularsOn
-      ? `ZOOM ${player.state.binocZoom.toFixed(1)}x` : "";
-
-    // Held item slot
-    const held = player.state.held;
-    if (held) {
-      this.slotHeld.classList.add("active");
-      this.slotHeld.textContent = labelFor(held.kind) + " · LMB THROW";
-    } else {
-      this.slotHeld.classList.remove("active");
-      this.slotHeld.textContent = "Empty hand";
+    // Ammo
+    if (weapon) {
+      if (this.ammoMag) {
+        this.ammoMag.textContent = weapon.magAmmo;
+        this.ammoMag.className = "ammo-mag"
+          + (weapon.magAmmo === 0 ? " empty"
+             : weapon.magAmmo <= 3 ? " low" : "");
+      }
+      if (this.ammoRes) this.ammoRes.textContent = weapon.reserveAmmo;
+      if (this.reloadBar) {
+        this.reloadBar.classList.toggle("on", weapon.isReloading);
+        if (weapon.isReloading) {
+          this.reloadFill.style.width = (weapon.reloadProgress * 100) + "%";
+        }
+      }
     }
 
-    // CCTV status slot
-    if (cctv.isActive) {
-      this.slotCCTV.classList.add("active");
-      this.slotCCTV.textContent = `CCTV · ${cctv.timeLeft.toFixed(0)}s`;
-    } else if (cctv.inCooldown) {
-      this.slotCCTV.classList.remove("active");
-      this.slotCCTV.textContent = `CCTV · cool ${cctv.cooldownLeft.toFixed(0)}s`;
-    } else {
-      this.slotCCTV.classList.remove("active");
-      this.slotCCTV.textContent = `CCTV · READY`;
+    // Skeleton kill counter
+    if (skeletons && this.killsLeft) {
+      this.killsLeft.textContent = skeletons.alive;
     }
 
-    // Aim bar
-    if (player.state.aiming && held) {
-      this.aimBar.classList.add("on");
-      this.aimFill.style.width = (player.state.aimPower * 100) + "%";
-    } else {
-      this.aimBar.classList.remove("on");
+    // Threat label
+    if (skeletons && this.threatValue) {
+      if (skeletons.anyInCombat()) {
+        this.threatValue.textContent = "CONTACT";
+        this.threatValue.className = "combat";
+      } else if (skeletons.anyAlerted()) {
+        this.threatValue.textContent = "ALERT";
+        this.threatValue.className = "alert";
+      } else {
+        this.threatValue.textContent = "CLEAR";
+        this.threatValue.className = "clear";
+      }
     }
 
-    // Binocular overlay
-    this.binoOverlay.classList.toggle("on", player.state.binocularsOn);
+    // ADS overlay
+    if (this.adsOverlay) this.adsOverlay.classList.toggle("on", player.state.ads);
+
+    // Crosshair spread / hide during ADS
+    if (this.crosshair) {
+      this.crosshair.classList.toggle("ads", player.state.ads);
+      const moving = player.vel.lengthSq() > 0.5;
+      this.crosshair.classList.toggle("spread",
+        !player.state.ads && (moving || player.state.sprinting));
+    }
+
+    // Damage flash
+    if (this._damageFlashTimer > 0) {
+      this._damageFlashTimer = Math.max(0, this._damageFlashTimer - dt);
+      const a = this._damageFlashTimer / 0.6;
+      this.damageFlash.style.background =
+        `radial-gradient(ellipse at center, rgba(140,0,0,${a*0.25}) 20%, rgba(180,0,0,${a*0.75}) 100%)`;
+    } else {
+      this.damageFlash.style.background = "radial-gradient(ellipse at center, rgba(180,0,0,0) 40%, rgba(180,0,0,0) 100%)";
+    }
+
+    // Directional damage arrows
+    // player.state.dmgFromYaw is already a RELATIVE angle (0 = in front of
+    // player, +PI/2 = right, PI = behind, -PI/2 = left). CSS rotate() with
+    // 0deg places the arrow pointing up (front), which matches.
+    if (player.state.dmgFromYaw !== null && player.state.dmgTimer > 0) {
+      const relDeg = player.state.dmgFromYaw * 180 / Math.PI;
+      const snapDeg = ((Math.round(relDeg / 45) * 45) % 360 + 360) % 360;
+      for (const arrow of this.dmgArrows) {
+        const d = parseInt(arrow.dataset.dir, 10);
+        if (d === snapDeg) {
+          arrow.classList.add("on");
+          arrow.style.transform = `rotate(${snapDeg}deg)`;
+          // auto-hide after ~0.6s via CSS transition
+          clearTimeout(arrow._tmo);
+          arrow._tmo = setTimeout(() => arrow.classList.remove("on"), 650);
+        }
+      }
+    }
+
+    // Hit marker timer
+    if (this._hitmarkerTimer > 0) {
+      this._hitmarkerTimer -= dt;
+      if (this._hitmarkerTimer <= 0) {
+        this.hitmarker.classList.remove("on", "kill");
+      }
+    }
 
     // Prompt
-    const cur = interaction.current;
-    if (cur) {
-      this.prompt.textContent = cur.label + this._truckProgressText(interaction);
+    if (interaction && interaction.current) {
+      this.prompt.textContent = interaction.current.label + this._truckProgressText(interaction);
       this.prompt.classList.add("on");
-    } else if (interaction.truckState.active && !interaction.truckState.started) {
+    } else if (interaction && interaction.truckState.active && !interaction.truckState.started) {
       this.prompt.textContent = "HOLD [E] " + this._truckProgressText(interaction);
       this.prompt.classList.add("on");
     } else {
       this.prompt.classList.remove("on");
     }
 
-    // Tension vignette
-    const dist = monster.position.distanceTo(player.pos);
-    const tension = Math.max(monster.alertLevel, Math.max(0, 1 - dist / 8));
-    this._pulseTimer += dt * (1 + tension * 4);
-    const pulse = (Math.sin(this._pulseTimer * 6) * 0.5 + 0.5) * tension;
-    this.damageFlash.style.background = `radial-gradient(ellipse at center, rgba(120,0,0,0) ${30 - pulse * 15}%, rgba(180,0,0,${0.05 + pulse * 0.5}) 100%)`;
-
-    // Monster state debug (small)
-    if (this.monsterState) {
-      this.monsterState.textContent = `${monster.state}  ·  ${dist.toFixed(1)}m`;
-    }
-    if (this.distFill) {
-      this.distFill.style.width = Math.max(0, Math.min(1, 1 - dist / 50)) * 100 + "%";
-    }
-
+    // Subtitle timer
     if (this._subtitleTimer > 0) {
       this._subtitleTimer -= dt;
       if (this._subtitleTimer <= 0) this.subtitle.classList.remove("on");
@@ -110,6 +178,15 @@ export class UI {
     const labels = [" · inserting keys...", " · cranking...", " · cranking harder..."];
     const pct = Math.round(inter.truckState.progress * 100);
     return `${labels[inter.truckState.step] || ""} ${pct}%`;
+  }
+
+  showHitMarker(isKill = false) {
+    this.hitmarker.classList.remove("on", "kill");
+    // force reflow to restart animation
+    void this.hitmarker.offsetWidth;
+    this.hitmarker.classList.add("on");
+    if (isKill) this.hitmarker.classList.add("kill");
+    this._hitmarkerTimer = 0.3;
   }
 
   flashMessage(text, dur = 2.6) {
@@ -140,15 +217,4 @@ export class UI {
 
   showJumpscare() { this.jumpscare.classList.remove("hidden"); }
   hideJumpscare() { this.jumpscare.classList.add("hidden"); }
-}
-
-function labelFor(kind) {
-  switch (kind) {
-    case "bottle": return "BOTTLE";
-    case "pipe":   return "PIPE";
-    case "nut":    return "NUT";
-    case "can":    return "CAN";
-    case "rebar":  return "REBAR";
-  }
-  return (kind || "ITEM").toUpperCase();
 }

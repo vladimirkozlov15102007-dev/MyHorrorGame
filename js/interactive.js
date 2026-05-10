@@ -4,21 +4,20 @@
 //   - Throwable pickup (from ThrowableSystem items)
 //   - Locker hide / exit
 //   - CCTV terminal activate / deactivate
-//   - Truck start sequence (hold E)
-//
-// 'K' in level = CCTV terminal — no keys are needed.  Truck starts via
-// a 3-step hold-E mini-game (insert key from visor, crank, crank again).
+//   - Truck start sequence (hold E). Truck REFUSES to start until all 10
+//     skeletons are dead (user spec).
 
 import * as THREE from "three";
 import { Audio } from "./audio.js";
 
 export class InteractionSystem {
-  constructor(level, player, ui, throwableSystem, cctv) {
+  constructor(level, player, ui, throwableSystem, cctv, skeletonManager) {
     this.level = level;
     this.player = player;
     this.ui = ui;
     this.throwables = throwableSystem;
     this.cctv = cctv;
+    this.skeletons = skeletonManager;    // may be null during early construction; set by setter
 
     this.time = 0;
     this.current = null;
@@ -29,6 +28,10 @@ export class InteractionSystem {
       started: false,
       promptTimer: 0,
     };
+  }
+
+  setSkeletonManager(mgr) {
+    this.skeletons = mgr;
   }
 
   update(dt, playerPos, playerDir) {
@@ -53,9 +56,7 @@ export class InteractionSystem {
     // Throwables
     const it = this.throwables.nearestItem(pos, range);
     if (it) {
-      const def = (this.player.state.held)
-        ? "SWAP " : "PICK UP ";
-      best = { type: "throwable", ref: it, label: `${def}${labelFor(it.kind)} [E]` };
+      best = { type: "throwable", ref: it, label: `PICK UP ${labelFor(it.kind)} [E]` };
       bestD = it.pos.distanceTo(pos);
     }
 
@@ -88,7 +89,11 @@ export class InteractionSystem {
       const t = this.level.truck;
       const d = t.interactPos.distanceTo(pos);
       if (d < 3.2 && d < bestD && !t.started) {
-        if (!this.truckState.active) {
+        const skelAlive = this.skeletons ? this.skeletons.alive : 0;
+        if (skelAlive > 0) {
+          best = { type: "truck_blocked", ref: t,
+            label: `ELIMINATE THE ${skelAlive} REMAINING SKELETON${skelAlive !== 1 ? "S" : ""}` };
+        } else if (!this.truckState.active) {
           best = { type: "truck", ref: t, label: "ENTER TRUCK [E]" };
         } else {
           best = { type: "truck", ref: t, label: "HOLD [E] TO START ENGINE" };
@@ -105,13 +110,10 @@ export class InteractionSystem {
     const f = this.current;
 
     if (f.type === "throwable") {
-      // If already holding something, drop it first
-      if (this.player.state.held) {
-        this.player.dropHeld(this.throwables, this.level);
-      }
+      // Picking up throwables just collects them (no carry system in the
+      // shooter build — kept for legacy distraction mechanic).
       const picked = this.throwables.pickup(f.ref);
       if (picked) {
-        this.player.state.held = { kind: f.ref.kind };
         this.ui.flashMessage(`Picked up ${labelFor(f.ref.kind)}`);
       }
     } else if (f.type === "locker") {
@@ -140,6 +142,8 @@ export class InteractionSystem {
         Audio.doorOpen();
         this.ui.flashMessage("Get in, hold E to start the engine");
       }
+    } else if (f.type === "truck_blocked") {
+      this.ui.flashMessage("Cannot escape yet — eliminate all skeletons first");
     }
   }
 
