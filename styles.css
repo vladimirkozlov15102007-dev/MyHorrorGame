@@ -1,8 +1,7 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
-  width: 100%;
-  height: 100%;
+  width: 100%; height: 100%;
   overflow: hidden;
   background: #000;
   color: #c8c8c8;
@@ -12,10 +11,9 @@ html, body {
 }
 
 #game { position: fixed; inset: 0; }
-
 #canvas { display: block; width: 100%; height: 100%; }
 
-/* Vignette always active */
+/* Vignette */
 #vignette {
   position: absolute; inset: 0;
   pointer-events: none;
@@ -29,202 +27,354 @@ html, body {
   z-index: 10;
 }
 
-/* Red pulse when monster near / damage */
+/* Red tension pulse */
 #damageFlash {
   position: absolute; inset: 0;
   pointer-events: none;
-  background: radial-gradient(ellipse at center, rgba(120,0,0,0) 40%, rgba(140,0,0,0.0) 100%);
+  background: radial-gradient(ellipse at center, rgba(120,0,0,0) 40%, rgba(140,0,0,0) 100%);
   z-index: 11;
   transition: background 0.2s;
 }
-#damageFlash.pulse {
-  background: radial-gradient(ellipse at center, rgba(120,0,0,0) 30%, rgba(180,0,0,0.55) 100%);
-}
 
-/* Binocular overlay */
+/* --- Binocular overlay (no flashlight; visible while Shift held) --- */
 #binocularOverlay {
   position: absolute; inset: 0;
-  pointer-events: none;
-  z-index: 12;
+  pointer-events: none; z-index: 12;
   display: none;
-  background:
-    radial-gradient(circle at 50% 50%, transparent 38vh, #000 40vh),
-    radial-gradient(circle at 50% 50%, transparent 35vh, rgba(30,60,30,0.2) 36vh, transparent 38vh);
 }
 #binocularOverlay.on { display: block; }
-#binocularOverlay .reticle {
+
+/* Twin-circle mask */
+#binocularOverlay::before,
+#binocularOverlay::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: #000;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%);
+}
+#binocularOverlay::before {
+  background: radial-gradient(circle at 50% 50%, transparent 0 42vh, #000 43vh);
+}
+/* subtle lens vignette */
+#binocularOverlay .bino-ring {
   position: absolute; left: 50%; top: 50%;
-  width: 2px; height: 40px; background: rgba(180,0,0,0.6);
+  width: 84vh; height: 84vh;
   transform: translate(-50%, -50%);
-  box-shadow: 0 0 8px rgba(180,0,0,0.6);
+  border-radius: 50%;
+  box-shadow:
+    0 0 40px 10px rgba(0,0,0,0.8) inset,
+    0 0 200px 50px rgba(0,0,0,0.8) inset;
+  pointer-events: none;
 }
-#binocularOverlay .reticle::before,
-#binocularOverlay .reticle::after {
-  content: ""; position: absolute; left: -19px; top: 19px;
-  width: 40px; height: 2px; background: rgba(180,0,0,0.6);
-  box-shadow: 0 0 8px rgba(180,0,0,0.6);
+#binocularOverlay .bino-reticle {
+  position: absolute; left: 50%; top: 50%;
+  width: 2px; height: 80px;
+  background: rgba(140,0,0,0.55);
+  transform: translate(-50%, -50%);
+}
+#binocularOverlay .bino-cross {
+  position: absolute; left: 50%; top: 50%;
+  width: 80px; height: 2px;
+  background: rgba(140,0,0,0.55);
+  transform: translate(-50%, -50%);
+}
+#binocularOverlay .bino-rangefinder {
+  position: absolute; left: 50%; top: 50%;
+  width: 36vh; height: 36vh;
+  border: 1px solid rgba(140,0,0,0.25);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 10px rgba(0,0,0,0.6) inset;
+}
+#binocularOverlay .bino-scan {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(10,30,10,0.0) 0 2px,
+    rgba(10,30,10,0.25) 2px 3px
+  );
+  mix-blend-mode: multiply;
+}
+#binocularOverlay .bino-readout {
+  position: absolute;
+  left: 56%; top: calc(50% + 18vh);
+  color: rgba(140,0,0,0.8);
+  font-size: 12px; letter-spacing: 3px;
 }
 
-/* HUD */
+/* --- HUD --- */
 #hud { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
-
 #crosshair {
   position: absolute; left: 50%; top: 50%;
   transform: translate(-50%, -50%);
-  font-size: 22px;
-  color: rgba(220, 220, 220, 0.6);
+  font-size: 22px; color: rgba(220,220,220,0.6);
   text-shadow: 0 0 4px black;
 }
 
-#bottomBar {
-  position: absolute;
-  bottom: 18px; left: 18px; right: 18px;
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  font-size: 12px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: #a8a8a8;
-  text-shadow: 0 0 4px black;
+/* Aim power bar */
+#aimBar {
+  position: absolute; left: 50%; top: 58%;
+  transform: translateX(-50%);
+  width: 220px; height: 10px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid #3a2a1a;
+  display: none;
 }
-.stat { min-width: 160px; }
+#aimBar.on { display: block; }
+#aimBar #aimFill {
+  height: 100%; width: 0%;
+  background: linear-gradient(to right, #f4d35e, #e35a1a);
+  transition: width 0.05s linear;
+}
+#aimBar .aim-label {
+  position: absolute; right: -60px; top: -2px;
+  color: #e3a61c; font-size: 11px; letter-spacing: 2px;
+}
+
+#bottomBar {
+  position: absolute; bottom: 18px; left: 18px; right: 18px;
+  display: flex; gap: 22px; align-items: flex-end;
+  font-size: 12px; letter-spacing: 2px; text-transform: uppercase;
+  color: #a8a8a8; text-shadow: 0 0 4px black;
+}
+.stat { min-width: 180px; }
 .stat .label { margin-bottom: 4px; opacity: 0.7; }
+.stat .sub { opacity: 0.6; margin-top: 2px; font-size: 10px; }
 .bar {
-  width: 160px; height: 8px;
+  width: 180px; height: 8px;
   background: rgba(30,30,30,0.7);
   border: 1px solid #333;
   overflow: hidden;
 }
-.fill { width: 100%; height: 100%; background: #c9a227; transition: width 0.15s linear; }
+.fill { width: 100%; height: 100%; transition: width 0.15s linear; background: #c9a227; }
 .fill.green { background: #3b8a3b; }
+.fill.red   { background: #8a1010; }
 
-#inventory { margin-left: auto; display: flex; gap: 12px; }
+#inventory { margin-left: auto; display: flex; gap: 10px; }
 .slot {
   padding: 6px 10px;
   border: 1px solid #333;
-  background: rgba(0,0,0,0.45);
-  font-size: 12px;
-  letter-spacing: 1px;
-  color: #888;
+  background: rgba(0,0,0,0.5);
+  font-size: 12px; letter-spacing: 1px; color: #888;
 }
-.slot.active { color: #f4d35e; border-color: #6b5a1e; box-shadow: 0 0 8px rgba(244,211,94,0.2); }
+.slot.active {
+  color: #f4d35e; border-color: #6b5a1e;
+  box-shadow: 0 0 10px rgba(244,211,94,0.25);
+}
 
 #prompt {
-  position: absolute;
-  left: 50%; top: 58%;
+  position: absolute; left: 50%; top: 58%;
   transform: translateX(-50%);
   padding: 6px 12px;
-  background: rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.65);
   border: 1px solid #333;
-  font-size: 13px;
-  letter-spacing: 2px;
-  color: #d0d0d0;
-  text-transform: uppercase;
-  opacity: 0;
-  transition: opacity 0.12s;
+  font-size: 13px; letter-spacing: 2px; color: #d0d0d0; text-transform: uppercase;
+  opacity: 0; transition: opacity 0.12s;
 }
 #prompt.on { opacity: 1; }
 
 #subtitle {
   position: absolute;
-  bottom: 80px; left: 50%;
+  bottom: 110px; left: 50%;
   transform: translateX(-50%);
-  color: #9a9a9a;
-  font-style: italic;
-  text-shadow: 0 0 4px black;
-  max-width: 60vw;
-  text-align: center;
-  opacity: 0;
-  transition: opacity 0.4s;
+  color: #9a9a9a; font-style: italic; text-shadow: 0 0 4px black;
+  max-width: 60vw; text-align: center;
+  opacity: 0; transition: opacity 0.4s;
 }
 #subtitle.on { opacity: 1; }
 
 #objective {
   position: absolute;
   top: 14px; left: 14px;
-  font-size: 12px;
-  letter-spacing: 1px;
-  color: #b9a04a;
-  text-shadow: 0 0 4px black;
+  font-size: 12px; letter-spacing: 1px; color: #b9a04a; text-shadow: 0 0 4px black;
   opacity: 0.85;
 }
 
-/* Overlays */
+/* --- CCTV overlay (security room) --- */
+#cctvOverlay {
+  position: absolute; inset: 0;
+  background: #000;
+  z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+#cctvOverlay.hidden { display: none; }
+#cctvFrame {
+  position: relative;
+  width: 90vw; height: 80vh;
+  border: 1px solid #1a1a1a;
+  background: radial-gradient(ellipse at center, #0a0a0a 0%, #000 90%);
+  box-shadow: 0 0 80px rgba(0,0,0,0.8), 0 0 120px rgba(0,50,0,0.2) inset;
+  padding: 40px 18px 18px 18px;
+  overflow: hidden;
+}
+#cctvHeader {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 34px;
+  padding: 0 14px;
+  display: flex; align-items: center; gap: 14px;
+  font-size: 11px; letter-spacing: 2px;
+  color: #4cff6a;
+  border-bottom: 1px solid #1f2a1f;
+  background: linear-gradient(to bottom, rgba(10,30,10,0.5), rgba(0,0,0,0.6));
+}
+#cctvHeader .cctv-brand { color: #4cff6a; font-weight: bold; }
+.cctv-status.online { color: #4cff6a; }
+.cctv-status.cooldown { color: #ff6a4c; }
+.cctv-status.ready { color: #c9ff4c; }
+#cctvHeader .cctv-hint { margin-left: auto; color: #3a6a3a; }
+
+#cctvGrid {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr;
+  gap: 10px;
+  width: 100%; height: 100%;
+}
+.cctv-tile {
+  position: relative; overflow: hidden;
+  border: 1px solid #1a3a1a;
+  background: #030603;
+  box-shadow: 0 0 30px rgba(0,100,0,0.1) inset;
+}
+.cctv-canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  filter: brightness(1.05) contrast(1.05) saturate(0.4) sepia(0.15);
+}
+.cctv-scan {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0,255,0,0.0) 0 2px,
+    rgba(0,80,0,0.22) 2px 3px
+  );
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+.cctv-static {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 50%, rgba(0,0,0,0.7) 100%),
+    repeating-linear-gradient(
+      0deg,
+      rgba(255,255,255,0.03) 0 1px,
+      transparent 1px 2px
+    );
+  animation: cctvNoise 0.12s steps(3) infinite;
+  pointer-events: none;
+}
+.cctv-static.glitch {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255,0,0,0.3) 0 2px,
+      rgba(0,255,0,0.05) 2px 4px,
+      rgba(0,0,0,0.8) 4px 6px
+    );
+  animation: none;
+}
+@keyframes cctvNoise {
+  0% { transform: translate(0,0); }
+  33% { transform: translate(-1px, 1px); }
+  66% { transform: translate(1px, -1px); }
+  100% { transform: translate(0,0); }
+}
+.cctv-label {
+  position: absolute; top: 6px; left: 8px;
+  color: #7aff7a; font-size: 10px; letter-spacing: 2px;
+  text-shadow: 0 0 3px #000;
+}
+.cctv-rec {
+  position: absolute; top: 6px; right: 10px;
+  color: #ff4040; font-size: 11px; letter-spacing: 2px;
+  animation: recBlink 1.4s infinite;
+}
+.cctv-time {
+  position: absolute; bottom: 6px; right: 10px;
+  color: #9aff9a; font-size: 10px; letter-spacing: 2px;
+  text-shadow: 0 0 3px #000;
+}
+@keyframes recBlink { 50% { opacity: 0.3; } }
+
+.cctv-noise {
+  position: absolute; inset: 34px 0 0 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.6) 100%);
+}
+
+/* --- Overlays (start/death/win) --- */
 .overlay {
   position: absolute; inset: 0;
   background: radial-gradient(ellipse at center, #0a0a0a 0%, #000 80%);
   display: flex; align-items: center; justify-content: center;
-  z-index: 100;
-  pointer-events: auto;
+  z-index: 100; pointer-events: auto;
 }
 .overlay.hidden { display: none; }
-
 .panel {
-  background: rgba(10,10,10,0.85);
+  background: rgba(10,10,10,0.88);
   border: 1px solid #2a2a2a;
   padding: 36px 46px;
-  max-width: 540px;
+  max-width: 560px;
   text-align: center;
-  box-shadow: 0 0 40px rgba(0,0,0,0.9);
+  box-shadow: 0 0 50px rgba(0,0,0,0.9);
 }
-.panel.dark { border-color: #3a0000; box-shadow: 0 0 60px rgba(120,0,0,0.4); }
-
+.panel.dark { border-color: #3a0000; box-shadow: 0 0 80px rgba(120,0,0,0.4); }
 .panel h1 {
-  font-size: 36px;
-  letter-spacing: 6px;
-  margin-bottom: 14px;
-  color: #c9a227;
+  font-size: 32px; letter-spacing: 6px; margin-bottom: 14px; color: #c9a227;
 }
-.panel .blood { color: #8a1010; text-shadow: 0 0 12px rgba(180,0,0,0.6); }
+.panel .blood { color: #8a1010; text-shadow: 0 0 14px rgba(180,0,0,0.6); }
 .panel .yellow { color: #f4d35e; }
-
 .panel .tag { font-size: 13px; color: #9a9a9a; margin-bottom: 22px; font-style: italic; }
-
 .controls {
   display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px;
-  text-align: left;
-  font-size: 13px;
-  color: #b5b5b5;
-  margin-bottom: 20px;
+  text-align: left; font-size: 12px; color: #b5b5b5; margin-bottom: 20px;
 }
 .controls b { color: #f4d35e; }
-
 .warn { font-size: 12px; color: #a06040; margin-bottom: 20px; }
-
 button {
-  background: #1a1a1a;
-  color: #c9a227;
-  border: 1px solid #6b5a1e;
-  padding: 12px 22px;
-  font-family: inherit;
-  font-size: 14px;
-  letter-spacing: 4px;
-  cursor: pointer;
-  transition: all 0.15s;
+  background: #1a1a1a; color: #c9a227; border: 1px solid #6b5a1e;
+  padding: 12px 22px; font-family: inherit; font-size: 14px;
+  letter-spacing: 4px; cursor: pointer; transition: all 0.15s;
 }
-button:hover { background: #2a2210; color: #f4d35e; box-shadow: 0 0 12px rgba(244,211,94,0.3); }
+button:hover {
+  background: #2a2210; color: #f4d35e;
+  box-shadow: 0 0 12px rgba(244,211,94,0.3);
+}
 
-/* Jumpscare */
+/* --- Jumpscare --- */
 #jumpscare {
   position: absolute; inset: 0;
   background: black;
   z-index: 200;
   display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
 }
 #jumpscare.hidden { display: none; }
 #jumpscare .face {
-  width: 80vmin; height: 80vmin;
+  width: 90vmin; height: 90vmin;
   background:
-    radial-gradient(circle at 35% 38%, #fff 2%, #000 3%, transparent 5%),
-    radial-gradient(circle at 65% 38%, #fff 2%, #000 3%, transparent 5%),
-    radial-gradient(ellipse at 50% 65%, #3a0000 0%, #000 8%, transparent 15%),
-    radial-gradient(ellipse at 50% 50%, #181818 20%, #000 60%);
-  animation: jump 0.35s steps(2) infinite;
-  filter: contrast(1.4) brightness(1.1);
+    radial-gradient(circle at 34% 36%, #ff2a2a 1.5%, #000 3%, transparent 6%),
+    radial-gradient(circle at 66% 36%, #ff2a2a 1.5%, #000 3%, transparent 6%),
+    radial-gradient(ellipse at 50% 70%, #3a0000 0%, #000 10%, transparent 18%),
+    radial-gradient(ellipse at 50% 50%, #0e0e0e 25%, #000 70%);
+  animation: jump 0.18s steps(2) infinite;
+  filter: contrast(1.6) brightness(1.15);
+}
+#jumpscare .jumpscare-fx {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(
+    0deg, rgba(255,0,0,0.1) 0 3px, rgba(0,0,0,0.2) 3px 6px
+  );
+  mix-blend-mode: screen;
+  animation: jumpFx 0.12s steps(2) infinite;
 }
 @keyframes jump {
   0%   { transform: scale(1.0) translate(0, 0); }
-  50%  { transform: scale(1.04) translate(-6px, 4px); }
-  100% { transform: scale(1.0) translate(3px, -3px); }
+  50%  { transform: scale(1.06) translate(-8px, 4px); }
+  100% { transform: scale(1.0) translate(5px, -5px); }
+}
+@keyframes jumpFx {
+  0% { transform: translateY(0); opacity: 0.9; }
+  50% { transform: translateY(4px); opacity: 0.4; }
+  100% { transform: translateY(-3px); opacity: 0.8; }
 }

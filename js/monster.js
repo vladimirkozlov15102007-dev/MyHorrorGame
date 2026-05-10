@@ -1,44 +1,54 @@
-// Adaptive Monster AI.
+// Adaptive Monster AI — advanced FSM + blackboard.
 //
-// Architecture: Finite State Machine + Blackboard (persistent memory).
-// States: PATROL, INVESTIGATE, CHASE, AMBUSH, SEARCH_HIDING, STUNNED.
+// States: PATROL, INVESTIGATE, CHASE, AMBUSH, SEARCH_HIDING, STALK, STUNNED.
 //
-// Adaptation (via blackboard.learn):
-//   hideScore        — how often player hides → more locker checks, more ambushes
-//   flashScore       — how often flashlight is on → better reaction to light, larger detect range when it shines
-//   sprintScore      — how often player sprints → faster reaction to footsteps, faster chase
+// Blackboard memory:
+//   lastSeenPos / lastSeenTime
+//   lastNoisePos / lastNoiseTime
+//   lastDistractionPos / lastDistractionTime / lastDistractionWasBreak
+//   witnessedHide (monster saw player enter a locker)
+//   adaptationScores: hideScore, binocScore, sprintScore, distractionScore
+//     - hideScore:   how much the player hides in lockers → more locker checks
+//     - binocScore:  how often the player stands still using binoculars →
+//                    monster more likely to AMBUSH and flank quietly
+//     - sprintScore: how often the player sprints → faster chase, longer hear
+//     - distractionScore: how often the player throws items → the monster
+//                    reduces the time spent investigating a distraction and
+//                    occasionally *ignores* small sounds (learns it's a trick)
 //
-// Senses:
-//   - Sight: cone in front, blocked by walls (raycast over collider AABBs)
-//   - Hearing: player.state.noise (scaled by sprintScore)
-//   - Light: player's flashlight direction intersecting monster's vicinity (scaled by flashScore)
+// Senses (light was removed since no flashlight):
+//   - Sight: cone in front blocked by walls (AABB raycast)
+//   - Hearing: player noise + distraction events from throwable system
+//   - Binocular-vulnerability: if player is using binoculars and monster is
+//     in front of them → no bonus (they see better). But if player is NOT
+//     looking at monster while using binoculars, monster gets a ~20%
+//     faster approach when flanking (because player is deaf + slow).
 //
-// Path movement: A* via level.pathfinder.
+// Catch: < CATCH_DIST (1.1m) triggers scream + kill.
 
 import * as THREE from "three";
 import { Audio } from "./audio.js";
-import { CELL } from "./level.js";
 
-const SIGHT_DIST = 14;
-const SIGHT_FOV = Math.PI * 0.55;   // ~100 degrees
-const HEAR_BASE = 10;               // max hearing radius at full noise
-const LIGHT_BASE = 18;              // flashlight "ping" distance
-const CATCH_DIST = 1.1;
+const SIGHT_DIST = 17;
+const SIGHT_FOV = Math.PI * 0.58;   // ~104°
+const HEAR_BASE = 12;
+const CATCH_DIST = 1.15;
+const DISTRACTION_HEAR_RADIUS = 28;
 
 export class Monster {
-  constructor(scene, level, player) {
+  constructor(scene, level, player, throwableSystem) {
     this.scene = scene;
     this.level = level;
     this.player = player;
+    this.throwables = throwableSystem;
 
-    // Root
     this.root = new THREE.Group();
     this.root.position.set(level.monsterSpawn.x, 0, level.monsterSpawn.z);
     scene.add(this.root);
 
     this._buildMesh();
 
-    // Movement
+    // Movement / path
     this.vel = new THREE.Vector3();
     this.lookYaw = 0;
     this.path = [];
@@ -50,217 +60,249 @@ export class Monster {
     this.state = "PATROL";
     this.stateTimer = 0;
     this.globalTimer = 0;
+    this._stateLog = "";
 
-    // Animation timers
+    // Animation
     this._walkPhase = 0;
-    this._limbSwing = 0;
 
-    // Blackboard (persistent memory)
+    // Blackboard
     this.bb = {
-      lastSeenPos: null,       // THREE.Vector3 or null
-      lastSeenTime: -999,
-      lastNoisePos: null,
-      lastNoiseTime: -999,
-      lastLightPingPos: null,
-      lastLightPingTime: -999,
+      lastSeenPos: null, lastSeenTime: -999,
+      lastNoisePos: null, lastNoiseTime: -999,
+      lastDistractionPos: null, lastDistractionTime: -999,
+      lastDistractionWasBreak: false,
       patrolTarget: null,
-      // Adaptation counters (clamped 0..1 after normalization)
-      hideScore: 0.0,
-      flashScore: 0.0,
-      sprintScore: 0.0,
-      // Ambush: where to go and stand still
-      ambushPos: null,
-      ambushUntil: 0,
-      // Anti-spam
+      ambushPos: null, ambushUntil: 0,
       lastGrowl: -999,
-      // When player is hidden, decay knowledge unless we saw them enter
       witnessedHide: false,
+      lastSearchedLocker: null,
+
+      // Adaptation
+      hideScore: 0,
+      binocScore: 0,
+      sprintScore: 0,
+      distractionScore: 0,
+
+      // Remember lockers that have been searched in this session
+      searchedLockers: new Set(),
     };
 
-    // Precompute wall segments for line-of-sight checks (cells of type '#')
-    // We'll use AABB raytest via level.colliders (blocksVision=true).
-
-    // footstep audio spacing
     this._footTimer = 0;
-
-    // Alert level 0..1 for music/HUD
     this.alertLevel = 0;
 
-    // kill callback set by main
     this.onCatch = null;
   }
 
   _buildMesh() {
-    // Tall, thin, dark creature.
     const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x0a0a0a, roughness: 1.0, metalness: 0.0, emissive: 0x050505
+      color: 0x050505, roughness: 1.0, metalness: 0.0, emissive: 0x030303
     });
     const limbMat = new THREE.MeshStandardMaterial({
-      color: 0x080808, roughness: 1.0, metalness: 0.0
+      color: 0x050505, roughness: 1.0, metalness: 0.0
     });
-    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff2a2a });
-    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x3a0000 });
+    const eyeMat = new THREE.MeshBasicMaterial({ color: 0xff3030 });
+    const mouthMat = new THREE.MeshBasicMaterial({ color: 0x2a0000 });
 
-    // Torso
+    // Torso — taller, thinner
     const torso = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.16, 0.22, 1.1, 8),
+      new THREE.CylinderGeometry(0.14, 0.22, 1.3, 10),
       bodyMat
     );
-    torso.position.y = 1.55;
+    torso.position.y = 1.75;
     this.root.add(torso);
 
-    // Head (elongated)
-    const head = new THREE.Mesh(
-      new THREE.SphereGeometry(0.22, 10, 10),
+    // Shoulder hump
+    const hump = new THREE.Mesh(
+      new THREE.SphereGeometry(0.28, 10, 10),
       bodyMat
     );
-    head.scale.set(0.8, 1.3, 0.9);
-    head.position.y = 2.3;
-    this.root.add(head);
-    this.head = head;
-
-    // Glowing eyes
-    for (const sx of [-0.08, 0.08]) {
-      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 6), eyeMat);
-      eye.position.set(sx, 2.33, 0.18);
-      this.root.add(eye);
-    }
-    // Gaping mouth
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.1, 0.05), mouthMat);
-    mouth.position.set(0, 2.15, 0.18);
-    this.root.add(mouth);
+    hump.scale.set(1.0, 0.6, 0.9);
+    hump.position.y = 2.35;
+    this.root.add(hump);
 
     // Neck
     const neck = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.06, 0.1, 0.3, 8),
+      new THREE.CylinderGeometry(0.06, 0.1, 0.35, 8),
       bodyMat
     );
-    neck.position.y = 2.05;
+    neck.position.y = 2.55;
     this.root.add(neck);
 
-    // Arms (very long)
-    const armGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.6, 6);
+    // Head (elongated)
+    const head = new THREE.Mesh(
+      new THREE.SphereGeometry(0.22, 12, 12),
+      bodyMat
+    );
+    head.scale.set(0.75, 1.4, 0.95);
+    head.position.y = 2.85;
+    head.position.z = 0.05;
+    this.root.add(head);
+    this.head = head;
+
+    // Glowing eyes (emissive)
+    for (const sx of [-0.08, 0.08]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.038, 8, 8), eyeMat);
+      eye.position.set(sx, 2.88, 0.22);
+      this.root.add(eye);
+    }
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.11, 0.06), mouthMat);
+    mouth.position.set(0, 2.68, 0.23);
+    this.root.add(mouth);
+
+    // Long arms
+    const armGeo = new THREE.CylinderGeometry(0.05, 0.05, 1.9, 6);
     const armL = new THREE.Mesh(armGeo, limbMat);
-    armL.position.set(-0.22, 1.25, 0);
-    armL.rotation.z = 0.2;
+    armL.position.set(-0.24, 1.4, 0);
+    armL.rotation.z = 0.15;
     this.armL = armL; this.root.add(armL);
     const armR = new THREE.Mesh(armGeo, limbMat);
-    armR.position.set(0.22, 1.25, 0);
-    armR.rotation.z = -0.2;
+    armR.position.set(0.24, 1.4, 0);
+    armR.rotation.z = -0.15;
     this.armR = armR; this.root.add(armR);
 
-    // Legs (long, thin)
-    const legGeo = new THREE.CylinderGeometry(0.07, 0.06, 1.3, 6);
+    // Long fingers on each hand (small cluster)
+    for (const sx of [-0.24, 0.24]) {
+      for (let i = 0; i < 4; i++) {
+        const f = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.012, 0.012, 0.28, 4),
+          limbMat
+        );
+        f.position.set(sx + (i - 1.5) * 0.025, 0.35, 0.02);
+        this.root.add(f);
+      }
+    }
+
+    // Long legs
+    const legGeo = new THREE.CylinderGeometry(0.07, 0.06, 1.45, 6);
     const legL = new THREE.Mesh(legGeo, limbMat);
-    legL.position.set(-0.1, 0.65, 0);
+    legL.position.set(-0.1, 0.72, 0);
     this.legL = legL; this.root.add(legL);
     const legR = new THREE.Mesh(legGeo, limbMat);
-    legR.position.set(0.1, 0.65, 0);
+    legR.position.set(0.1, 0.72, 0);
     this.legR = legR; this.root.add(legR);
 
-    // Faint halo of dread (dim red point light so you feel it nearby)
-    this.aura = new THREE.PointLight(0x440000, 0.4, 3.2, 2.0);
+    // Aura
+    this.aura = new THREE.PointLight(0x330000, 0.35, 3.8, 2.0);
     this.aura.position.y = 1.5;
     this.root.add(this.aura);
   }
 
-  get position() {
-    return this.root.position;
-  }
+  get position() { return this.root.position; }
 
   setSpawn(x, z) {
     this.root.position.set(x, 0, z);
+    this.vel.set(0, 0, 0);
+    this.path = [];
+    this.pathIndex = 0;
   }
 
-  // ===== Main update =====
+  reset() {
+    this.state = "PATROL"; this.stateTimer = 0;
+    this.bb.lastSeenPos = null; this.bb.lastSeenTime = -999;
+    this.bb.lastNoisePos = null; this.bb.lastNoiseTime = -999;
+    this.bb.lastDistractionPos = null; this.bb.lastDistractionTime = -999;
+    this.bb.patrolTarget = null;
+    this.bb.ambushPos = null; this.bb.ambushUntil = 0;
+    this.bb.witnessedHide = false;
+    this.bb.searchedLockers = new Set();
+    this.bb.hideScore = 0; this.bb.binocScore = 0;
+    this.bb.sprintScore = 0; this.bb.distractionScore = 0;
+    this.alertLevel = 0;
+  }
+
   update(dt) {
     this.globalTimer += dt;
     this.stateTimer += dt;
 
-    // Update blackboard from player adaptive counters (smooth normalization)
-    // hidden count: every time player enters locker counts; normalize by +1 => fast curve
-    this.bb.hideScore   = Math.min(1, this.player.state.timesHidden / 4);
-    this.bb.flashScore  = Math.min(1, this.player.state.flashlightSeconds / 45);
-    this.bb.sprintScore = Math.min(1, this.player.state.sprintingSeconds / 18);
+    // Normalize adaptation counters
+    this.bb.hideScore        = Math.min(1, this.player.state.timesHidden / 4);
+    this.bb.binocScore       = Math.min(1, this.player.state.binocularsSeconds / 30);
+    this.bb.sprintScore      = Math.min(1, this.player.state.sprintingSeconds / 18);
+    this.bb.distractionScore = Math.min(1, this.player.state.throwsMade / 5);
 
-    // === Sensing ===
+    // Read distraction events from throwable system
+    if (this.throwables) {
+      const evs = this.throwables.popDistractions();
+      for (const ev of evs) {
+        // Distraction heard if within DISTRACTION_HEAR_RADIUS
+        const d = this.root.position.distanceTo(ev.pos);
+        if (d < DISTRACTION_HEAR_RADIUS) {
+          // The monster adapts — if player throws a LOT, monster becomes
+          // suspicious and is less likely to fully commit to the noise.
+          const trust = 1.0 - this.bb.distractionScore * 0.45;
+          if (Math.random() < trust || ev.isBreak) {
+            this.bb.lastDistractionPos = ev.pos.clone();
+            this.bb.lastDistractionTime = this.globalTimer;
+            this.bb.lastDistractionWasBreak = ev.isBreak;
+          }
+        }
+      }
+    }
+
     const sense = this._sense(dt);
-
-    // === State transitions ===
     this._transition(sense);
 
-    // === Execute current state ===
     switch (this.state) {
       case "PATROL":        this._doPatrol(dt); break;
       case "INVESTIGATE":   this._doInvestigate(dt); break;
       case "CHASE":         this._doChase(dt, sense); break;
       case "AMBUSH":        this._doAmbush(dt); break;
+      case "STALK":         this._doStalk(dt); break;
       case "SEARCH_HIDING": this._doSearchHiding(dt); break;
       case "STUNNED":       this._doStunned(dt); break;
     }
 
-    // === Animation ===
     this._animate(dt);
 
-    // === Alert level for HUD/audio ===
-    const seeing = sense.canSee ? 1 : 0;
     const target = Math.max(
-      seeing,
+      sense.canSee ? 1 : 0,
       this.state === "CHASE" ? 1.0 : 0,
-      this.state === "AMBUSH" ? 0.8 : 0,
+      this.state === "AMBUSH" ? 0.7 : 0,
+      this.state === "STALK" ? 0.6 : 0,
       this.state === "INVESTIGATE" ? 0.5 : 0,
-      this.state === "SEARCH_HIDING" ? 0.55 : 0,
+      this.state === "SEARCH_HIDING" ? 0.6 : 0,
       0
     );
     this.alertLevel += (target - this.alertLevel) * Math.min(1, dt * 2.0);
 
-    // === Check catch ===
+    // Catch player
     const dist = this.root.position.distanceTo(this.player.pos);
     if (!this.player.state.hidden && dist < CATCH_DIST) {
       if (this.onCatch) this.onCatch();
     }
-    // If player is hiding AND monster is close AND we witnessed them or we reached SEARCH_HIDING, check locker
+    // Catch in locker if we witnessed hide AND we reach it
     if (this.player.state.hidden && this.player.state.hiddenIn) {
-      const hideSpot = this.player.state.hiddenIn;
-      const dLocker = this.root.position.distanceTo(new THREE.Vector3(hideSpot.x, 0, hideSpot.z));
+      const hs = this.player.state.hiddenIn;
+      const dLocker = this.root.position.distanceTo(new THREE.Vector3(hs.x, 0, hs.z));
       if (dLocker < 1.3 && this.state === "SEARCH_HIDING" && this.bb.witnessedHide) {
         if (this.onCatch) this.onCatch();
       }
     }
   }
 
-  // ===== Sensing =====
   _sense(dt) {
     const mp = this.root.position;
     const pp = this.player.pos;
     const dx = pp.x - mp.x, dz = pp.z - mp.z;
     const dist = Math.sqrt(dx * dx + dz * dz);
 
-    // Adaptive modifiers
-    const hearMult = 1 + this.bb.sprintScore * 0.8;         // faster reaction to footsteps
-    const lightMult = 1 + this.bb.flashScore * 0.9;         // longer light detect range
+    const hearMult = 1 + this.bb.sprintScore * 0.9;
 
-    let canSee = false;
-    let heard = false;
-    let lightPinged = false;
+    let canSee = false, heard = false;
 
-    // If player is hidden, sight/hearing effectively off unless monster was chasing close
-    if (!this.player.state.hidden) {
-      // --- Sight ---
+    if (!this.player.state.hidden && !this.player.state.usingCCTV) {
+      // Sight
       if (dist < SIGHT_DIST) {
         const forward = new THREE.Vector3(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
         const toP = new THREE.Vector3(dx, 0, dz).normalize();
         const dot = forward.dot(toP);
         const angle = Math.acos(Math.max(-1, Math.min(1, dot)));
-        const inFOV = angle < SIGHT_FOV * 0.5;
-        if (inFOV && this._hasLineOfSight(mp, pp)) {
-          // brighter if flashlight lights player area — easier to spot
+        if (angle < SIGHT_FOV * 0.5 && this._hasLineOfSight(mp, pp)) {
           canSee = true;
         }
       }
-
-      // --- Hearing (player noise ping) ---
-      const noise = this.player.state.noise; // 0..1 this frame
+      // Hearing
+      const noise = this.player.state.noise;
       if (noise > 0) {
         const hearRadius = HEAR_BASE * hearMult * noise;
         if (dist < hearRadius) {
@@ -269,35 +311,18 @@ export class Monster {
           this.bb.lastNoiseTime = this.globalTimer;
         }
       }
-
-      // --- Light "ping" ---
-      // If flashlight is on AND its cone sweeps towards the monster's area (or away from player in a way monster sees light bouncing)
-      if (this.player.state.flashlightOn && !this.player.state.binocularsOn) {
-        const lookDir = this.player.getLookDir();
-        const toM = new THREE.Vector3().subVectors(mp, pp);
-        const dToM = toM.length();
-        if (dToM < LIGHT_BASE * lightMult) {
-          toM.normalize();
-          const align = lookDir.dot(toM);
-          // if monster is in front of player (flashlight roughly pointed that way) → ping
-          if (align > 0.55) {
-            lightPinged = true;
-            this.bb.lastLightPingPos = pp.clone();
-            this.bb.lastLightPingTime = this.globalTimer;
-          }
-          // If player is looking AWAY from monster but monster is close — also notice "shine reflecting"
-          else if (dToM < 6 && this.player.state.flashlightOn) {
-            // subtle ping, weak priority — only if really close
-            this.bb.lastLightPingPos = pp.clone();
-            this.bb.lastLightPingTime = this.globalTimer;
-          }
-        }
-      }
     } else {
-      // Player hidden: witnessed hide only if we recently saw them hide
-      // If chase was active and we lost sight very recently (<0.8s), consider we witnessed it
-      if (this.state === "CHASE" && this.globalTimer - this.bb.lastSeenTime < 0.8) {
+      // Hidden or CCTV: detect hide-entry
+      if (this.player.state.hidden && this.state === "CHASE"
+          && (this.globalTimer - this.bb.lastSeenTime) < 0.9) {
         this.bb.witnessedHide = true;
+      }
+      // If player is on CCTV still at close range, monster can actually stalk them
+      if (this.player.state.usingCCTV && dist < SIGHT_DIST
+          && this._hasLineOfSight(mp, pp)) {
+        // We "know" the player is at the terminal → slowly stalk.
+        this.bb.lastSeenPos = pp.clone();
+        this.bb.lastSeenTime = this.globalTimer;
       }
     }
 
@@ -305,78 +330,82 @@ export class Monster {
       this.bb.lastSeenPos = pp.clone();
       this.bb.lastSeenTime = this.globalTimer;
     }
-
-    return { canSee, heard, lightPinged, dist };
+    return { canSee, heard, dist };
   }
 
-  // AABB raycast over blocking colliders
   _hasLineOfSight(from, to) {
     const dx = to.x - from.x, dz = to.z - from.z;
     const len = Math.sqrt(dx * dx + dz * dz);
     if (len < 0.001) return true;
-    const rayDx = dx / len, rayDz = dz / len;
-
+    const rdx = dx / len, rdz = dz / len;
     for (const c of this.level.colliders) {
       if (!c.blocksVision) continue;
-      const t = raySegmentAABB(from.x, from.z, rayDx, rayDz, len, c);
+      const t = raySegmentAABB(from.x, from.z, rdx, rdz, len, c);
       if (t !== null) return false;
     }
     return true;
   }
 
-  // ===== State transitions =====
   _transition(sense) {
-    const timeSinceSeen = this.globalTimer - this.bb.lastSeenTime;
-    const timeSinceNoise = this.globalTimer - this.bb.lastNoiseTime;
-    const timeSinceLight = this.globalTimer - this.bb.lastLightPingTime;
+    const tSeen = this.globalTimer - this.bb.lastSeenTime;
+    const tNoise = this.globalTimer - this.bb.lastNoiseTime;
+    const tDist = this.globalTimer - this.bb.lastDistractionTime;
 
-    // Top priorities
+    // Direct sight → chase
     if (sense.canSee) {
-      this._setState("CHASE");
-      // growl on re-acquire
-      if (this.globalTimer - this.bb.lastGrowl > 4) {
-        this.bb.lastGrowl = this.globalTimer;
-        Audio.monsterGrowl(0.8);
+      if (this.state !== "CHASE") {
+        if (this.globalTimer - this.bb.lastGrowl > 3.5) {
+          Audio.monsterGrowl(0.8);
+          this.bb.lastGrowl = this.globalTimer;
+        }
       }
+      this._setState("CHASE");
       return;
     }
 
-    // If player just hid and we witnessed it → SEARCH_HIDING (monster checks lockers)
+    // Player entered locker and monster witnessed it
     if (this.player.state.hidden && this.bb.witnessedHide && this.state !== "SEARCH_HIDING") {
       this._setState("SEARCH_HIDING");
       return;
     }
 
-    // Chase state → investigate last seen if we lost them recently
+    // Player idle on CCTV, monster knows their position → STALK
+    if (this.player.state.usingCCTV && tSeen < 3.0
+        && this.state !== "CHASE" && this.state !== "AMBUSH") {
+      this._setState("STALK");
+      return;
+    }
+
+    // Distraction recently heard → INVESTIGATE (most important new priority)
+    if (tDist < 0.35) {
+      this._setState("INVESTIGATE");
+      this._pathCooldown = 0;
+      return;
+    }
+
+    // Chase timeout
     if (this.state === "CHASE") {
-      if (timeSinceSeen > 3.0) {
-        // chase timeout — go investigate or ambush
-        if (this.bb.hideScore > 0.35 && Math.random() < 0.35 + this.bb.hideScore * 0.3) {
+      if (tSeen > 3.0) {
+        // Decide: AMBUSH if player hides a lot, else INVESTIGATE last seen
+        const ambushProb = 0.25 + this.bb.hideScore * 0.4 + this.bb.binocScore * 0.25;
+        if (Math.random() < ambushProb) {
           this._pickAmbushNear(this.bb.lastSeenPos || this.player.pos);
           this._setState("AMBUSH");
         } else {
           this._setState("INVESTIGATE");
         }
-        return;
       }
-      return; // stay chasing
+      return;
     }
 
-    // New light ping → investigate/chase direction
-    if (timeSinceLight < 0.3) {
+    // Noise → INVESTIGATE
+    if (tNoise < 0.3) {
       this._setState("INVESTIGATE");
       this._pathCooldown = 0;
       return;
     }
 
-    // New noise → investigate
-    if (timeSinceNoise < 0.3) {
-      this._setState("INVESTIGATE");
-      this._pathCooldown = 0;
-      return;
-    }
-
-    // If ambushing, exit when timer elapsed
+    // AMBUSH timeout
     if (this.state === "AMBUSH") {
       if (this.globalTimer > this.bb.ambushUntil) {
         this._setState("PATROL");
@@ -384,18 +413,32 @@ export class Monster {
       return;
     }
 
-    // If searching hiding spots and too much time passed
+    // STALK timeout
+    if (this.state === "STALK") {
+      if (this.stateTimer > 8 || !this.player.state.usingCCTV) {
+        this._setState("PATROL");
+      }
+      return;
+    }
+
+    // SEARCH_HIDING — rotate through nearby lockers
     if (this.state === "SEARCH_HIDING") {
-      if (this.stateTimer > 12 || !this.player.state.hidden) {
+      if (!this.player.state.hidden) {
+        this.bb.witnessedHide = false;
+        this._setState("PATROL");
+      } else if (this.stateTimer > 14) {
+        // gave up
         this.bb.witnessedHide = false;
         this._setState("PATROL");
       }
       return;
     }
 
-    // Investigate — transition to patrol once we reached target
+    // INVESTIGATE — end at target
     if (this.state === "INVESTIGATE") {
-      if (this.stateTimer > 8 || this._atPathEnd()) {
+      // Adapted: if player throws a lot, shorten investigate duration
+      const giveUp = 8 - this.bb.distractionScore * 4;
+      if (this.stateTimer > giveUp || this._atPathEnd()) {
         this._setState("PATROL");
       }
       return;
@@ -411,10 +454,7 @@ export class Monster {
     this._pathCooldown = 0;
   }
 
-  // ===== State behaviors =====
-
   _doPatrol(dt) {
-    // Walk to a random walkable cell. Pick new target when reached.
     if (!this.bb.patrolTarget || this._atPathEnd()) {
       const cell = this.level.pathfinder.randomWalkable();
       const w = this.level.cellToWorld(cell.cx, cell.cy);
@@ -425,80 +465,98 @@ export class Monster {
   }
 
   _doInvestigate(dt) {
-    // Target = latest noise OR last light ping OR last seen
-    const timeNoise = this.globalTimer - this.bb.lastNoiseTime;
-    const timeLight = this.globalTimer - this.bb.lastLightPingTime;
-    const timeSeen = this.globalTimer - this.bb.lastSeenTime;
-    let target = this.bb.lastSeenPos;
-    let best = timeSeen;
-    if (this.bb.lastNoisePos && timeNoise < best) { target = this.bb.lastNoisePos; best = timeNoise; }
-    if (this.bb.lastLightPingPos && timeLight < best) { target = this.bb.lastLightPingPos; best = timeLight; }
+    // Most recent cue wins
+    const tNoise = this.globalTimer - this.bb.lastNoiseTime;
+    const tDist  = this.globalTimer - this.bb.lastDistractionTime;
+    const tSeen  = this.globalTimer - this.bb.lastSeenTime;
+    let target = null, best = Infinity;
+    if (this.bb.lastSeenPos && tSeen < best)       { target = this.bb.lastSeenPos;        best = tSeen; }
+    if (this.bb.lastNoisePos && tNoise < best)     { target = this.bb.lastNoisePos;       best = tNoise; }
+    if (this.bb.lastDistractionPos && tDist < best) { target = this.bb.lastDistractionPos; best = tDist; }
     if (!target) { this._setState("PATROL"); return; }
 
     if (!this.path.length || this._pathTarget.distanceTo(target) > 2.5) {
       this._setPathTo(target);
     }
-    this._followPath(dt, 2.4);
+    const speed = 2.4 + this.bb.sprintScore * 0.7;
+    this._followPath(dt, speed);
+
+    // Arrived: glance around
+    if (this._atPathEnd()) {
+      this.vel.set(0, 0, 0);
+      this.lookYaw += Math.sin(this.globalTimer * 1.1) * dt * 0.6;
+      if (Math.random() < dt * 0.25) Audio.monsterGrowl(0.35);
+    }
   }
 
   _doChase(dt, sense) {
     const target = sense.canSee ? this.player.pos : (this.bb.lastSeenPos || this.player.pos);
-    if (!this.path.length || this._pathCooldown <= 0 || this._pathTarget.distanceTo(target) > 2.0) {
+    if (!this.path.length || this._pathCooldown <= 0 || this._pathTarget.distanceTo(target) > 1.8) {
       this._setPathTo(target);
-      this._pathCooldown = 0.3;
+      this._pathCooldown = 0.25;
     } else {
       this._pathCooldown -= dt;
     }
-    const chaseSpeed = 4.2 + this.bb.sprintScore * 1.2; // adapt faster if player sprints
-    this._followPath(dt, chaseSpeed);
+    const base = 4.4 + this.bb.sprintScore * 1.4;
+    // Flank bonus if player is using binoculars (slow + deaf)
+    const flankBonus = this.player.state.binocularsOn ? 0.7 : 0;
+    this._followPath(dt, base + flankBonus);
+  }
+
+  _doStalk(dt) {
+    // Sneak slowly toward the player (who is on CCTV)
+    if (!this.path.length || this._atPathEnd()) {
+      const t = this.bb.lastSeenPos || this.player.pos;
+      // Pick a position slightly behind them
+      const approach = new THREE.Vector3(t.x, 0, t.z);
+      this._setPathTo(approach);
+    }
+    this._followPath(dt, 1.3);
   }
 
   _doAmbush(dt) {
-    // Walk to ambush pos, then stand still looking around (shifting lookYaw occasionally)
-    if (!this.bb.ambushPos) {
-      this._setState("PATROL"); return;
-    }
+    if (!this.bb.ambushPos) { this._setState("PATROL"); return; }
     const d = this.root.position.distanceTo(this.bb.ambushPos);
     if (d > 0.8 && !this._atPathEnd()) {
       if (!this.path.length) this._setPathTo(this.bb.ambushPos);
       this._followPath(dt, 2.2);
     } else {
-      // stand still, slowly pan head
       this.vel.set(0, 0, 0);
       this.lookYaw += Math.sin(this.globalTimer * 0.6) * dt * 0.5;
-      if (Math.random() < dt * 0.3) {
-        Audio.monsterGrowl(0.35);
-      }
+      if (Math.random() < dt * 0.25) Audio.monsterGrowl(0.35);
     }
   }
 
   _doSearchHiding(dt) {
-    // Find nearest locker, path to it
+    // Choose nearest UNSEARCHED locker; otherwise any locker
     if (!this.path.length || this._atPathEnd()) {
-      // pick nearest UNCHECKED locker (use occupancy as hint if we remember it, otherwise pick closest)
+      // mark last locker as searched
+      if (this.bb.lastSearchedLocker) {
+        this.bb.searchedLockers.add(this.bb.lastSearchedLocker);
+      }
       let best = null, bestD = Infinity;
       for (const spot of this.level.hideSpots) {
+        if (this.bb.searchedLockers.has(spot)) continue;
         const d = this.root.position.distanceTo(new THREE.Vector3(spot.x, 0, spot.z));
         if (d < bestD) { bestD = d; best = spot; }
       }
-      if (best) {
-        this._setPathTo(new THREE.Vector3(best.entryX, 0, best.entryZ));
+      if (!best) {
+        // all searched → give up
+        this.bb.witnessedHide = false;
+        this._setState("PATROL");
+        return;
       }
+      this.bb.lastSearchedLocker = best;
+      this._setPathTo(new THREE.Vector3(best.entryX, 0, best.entryZ));
     }
     this._followPath(dt, 2.6 + this.bb.hideScore * 0.8);
-
-    // sporadic growl
-    if (Math.random() < dt * 0.25) {
-      Audio.monsterGrowl(0.5);
-    }
+    if (Math.random() < dt * 0.25) Audio.monsterGrowl(0.45);
   }
 
   _doStunned(dt) {
     this.vel.set(0, 0, 0);
     if (this.stateTimer > 2.0) this._setState("PATROL");
   }
-
-  // ===== Path follow =====
 
   _setPathTo(target) {
     this._pathTarget.copy(target);
@@ -508,67 +566,60 @@ export class Monster {
       this.level.worldToCell, this.level.cellToWorld
     );
     if (!wp || wp.length === 0) {
-      this.path = [];
-      this.pathIndex = 0;
+      this.path = []; this.pathIndex = 0;
       return;
     }
-    // Skip first (current cell) to avoid backtrack
     this.path = wp.slice(1);
     this.pathIndex = 0;
   }
 
-  _atPathEnd() {
-    return !this.path.length || this.pathIndex >= this.path.length;
-  }
+  _atPathEnd() { return !this.path.length || this.pathIndex >= this.path.length; }
 
   _followPath(dt, speed) {
-    if (this._atPathEnd()) {
-      this.vel.set(0, 0, 0);
-      return;
-    }
+    if (this._atPathEnd()) { this.vel.set(0, 0, 0); return; }
     const wp = this.path[this.pathIndex];
     const mp = this.root.position;
     const dx = wp.x - mp.x, dz = wp.z - mp.z;
     const d = Math.sqrt(dx * dx + dz * dz);
-    if (d < 0.4) {
-      this.pathIndex++;
-      return;
-    }
+    if (d < 0.4) { this.pathIndex++; return; }
     const nx = dx / d, nz = dz / d;
     const vx = nx * speed, vz = nz * speed;
-    // Move (no collision step; path stays on walkable cells, but add a little AABB safety)
     const nextX = mp.x + vx * dt;
     const nextZ = mp.z + vz * dt;
     if (!this._collidesWalls(nextX, mp.z)) mp.x = nextX;
     if (!this._collidesWalls(mp.x, nextZ)) mp.z = nextZ;
 
-    // Smooth-rotate to face velocity
     const targetYaw = Math.atan2(nx, nz);
     this.lookYaw = lerpAngle(this.lookYaw, targetYaw, Math.min(1, dt * 6));
 
     this.vel.set(vx, 0, vz);
 
-    // Footstep sound occasionally
+    // Spatial footstep audio
     this._footTimer -= dt;
     if (this._footTimer <= 0) {
       this._footTimer = 0.45 - Math.min(0.2, (speed - 1.5) * 0.05);
       const distToPlayer = this.player.pos.distanceTo(mp);
-      const vol = Math.max(0, 1 - distToPlayer / 18);
-      if (vol > 0.05) Audio.monsterFootstep(vol * 0.9);
+      const vol = Math.max(0, 1 - distToPlayer / 20);
+      if (vol > 0.03) {
+        // simple panning by relative yaw
+        const rel = new THREE.Vector3(mp.x - this.player.pos.x, 0, mp.z - this.player.pos.z);
+        rel.applyEuler(new THREE.Euler(0, -this.player.yaw, 0, "YXZ"));
+        const pan = Math.max(-1, Math.min(1, rel.x / 12));
+        Audio.monsterFootstep(vol, pan);
+      }
     }
   }
 
   _pickAmbushNear(pos) {
-    // Choose a point a few cells away from `pos` that is still walkable
     const cell = this.level.worldToCell(pos.x, pos.z);
-    for (let tries = 0; tries < 30; tries++) {
-      const dx = Math.floor(Math.random() * 7 - 3);
-      const dy = Math.floor(Math.random() * 7 - 3);
+    for (let tries = 0; tries < 40; tries++) {
+      const dx = Math.floor(Math.random() * 9 - 4);
+      const dy = Math.floor(Math.random() * 9 - 4);
       const cx = cell.cx + dx, cy = cell.cy + dy;
       if (this.level.pathfinder.isWalkable(cx, cy)) {
         const w = this.level.cellToWorld(cx, cy);
         this.bb.ambushPos = new THREE.Vector3(w.x, 0, w.z);
-        this.bb.ambushUntil = this.globalTimer + 10 + this.bb.hideScore * 8;
+        this.bb.ambushUntil = this.globalTimer + 10 + this.bb.hideScore * 6 + this.bb.binocScore * 4;
         this._setPathTo(this.bb.ambushPos);
         return;
       }
@@ -581,14 +632,16 @@ export class Monster {
   _collidesWalls(x, z) {
     const r = 0.35;
     for (const c of this.level.colliders) {
-      if (!c.blocksVision) continue; // only walls block monster
+      if (c.kind === "pallet") continue;
+      if (!c.blocksVision && c.kind !== "locker" && c.kind !== "desk"
+          && c.kind !== "machine" && c.kind !== "crate" && c.kind !== "cctv"
+          && c.kind !== "truck" && c.kind !== "rack" && c.kind !== "container") continue;
       if (x + r > c.minX && x - r < c.maxX &&
           z + r > c.minZ && z - r < c.maxZ) return true;
     }
     return false;
   }
 
-  // ===== Animation =====
   _animate(dt) {
     const moving = this.vel.lengthSq() > 0.01;
     if (moving) {
@@ -597,22 +650,20 @@ export class Monster {
     }
     const s = Math.sin(this._walkPhase);
     const c = Math.cos(this._walkPhase);
-    // Legs
-    if (this.legL) this.legL.rotation.x = s * 0.7;
-    if (this.legR) this.legR.rotation.x = -s * 0.7;
-    // Arms counter-swing (long dangling)
-    if (this.armL) this.armL.rotation.x = -s * 0.5 + 0.2;
-    if (this.armR) this.armR.rotation.x = s * 0.5 + 0.2;
-    // Head slight bob
-    if (this.head) this.head.position.y = 2.3 + Math.abs(c) * 0.03;
-
-    // Root rotation — mesh is built facing +Z (eyes/mouth are at z=+0.18),
-    // sense forward vector uses (sin(yaw),0,cos(yaw)), so identity rotation aligns them.
+    if (this.legL) this.legL.rotation.x = s * 0.75;
+    if (this.legR) this.legR.rotation.x = -s * 0.75;
+    if (this.armL) this.armL.rotation.x = -s * 0.55 + 0.12;
+    if (this.armR) this.armR.rotation.x = s * 0.55 + 0.12;
+    if (this.head) this.head.position.y = 2.85 + Math.abs(c) * 0.04;
     this.root.rotation.y = this.lookYaw;
+
+    // Aura flickers with alert
+    if (this.aura) {
+      this.aura.intensity = 0.25 + this.alertLevel * 1.2 + Math.random() * 0.05;
+      this.aura.color.setHSL(0.0, 1.0, 0.15 + this.alertLevel * 0.25);
+    }
   }
 }
-
-// --- Utilities ---
 
 function lerpAngle(a, b, t) {
   let diff = b - a;
@@ -622,27 +673,21 @@ function lerpAngle(a, b, t) {
 }
 
 function raySegmentAABB(ox, oz, dx, dz, maxT, box) {
-  // Standard slab test in 2D (XZ plane)
-  let tmin = 0;
-  let tmax = maxT;
+  let tmin = 0, tmax = maxT;
   if (Math.abs(dx) < 1e-8) {
     if (ox < box.minX || ox > box.maxX) return null;
   } else {
-    let t1 = (box.minX - ox) / dx;
-    let t2 = (box.maxX - ox) / dx;
+    let t1 = (box.minX - ox) / dx, t2 = (box.maxX - ox) / dx;
     if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-    tmin = Math.max(tmin, t1);
-    tmax = Math.min(tmax, t2);
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
     if (tmin > tmax) return null;
   }
   if (Math.abs(dz) < 1e-8) {
     if (oz < box.minZ || oz > box.maxZ) return null;
   } else {
-    let t1 = (box.minZ - oz) / dz;
-    let t2 = (box.maxZ - oz) / dz;
+    let t1 = (box.minZ - oz) / dz, t2 = (box.maxZ - oz) / dz;
     if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp; }
-    tmin = Math.max(tmin, t1);
-    tmax = Math.min(tmax, t2);
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2);
     if (tmin > tmax) return null;
   }
   return tmin;

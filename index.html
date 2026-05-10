@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
-  <title>The Yellow Truck — Horror</title>
+  <title>Old Amber Factory — The Yellow Truck</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -13,79 +13,105 @@
     <!-- Vignette / damage overlay -->
     <div id="vignette"></div>
     <div id="damageFlash"></div>
+
+    <!-- Binocular overlay -->
     <div id="binocularOverlay">
-      <div class="reticle"></div>
+      <div class="bino-ring"></div>
+      <div class="bino-rangefinder"></div>
+      <div class="bino-reticle"></div>
+      <div class="bino-cross"></div>
+      <div id="zoomReadout" class="bino-readout"></div>
+      <div class="bino-scan"></div>
     </div>
 
     <!-- HUD -->
     <div id="hud">
       <div id="crosshair">·</div>
 
+      <!-- Aim power bar -->
+      <div id="aimBar"><div id="aimFill"></div><span class="aim-label">POWER</span></div>
+
       <div id="bottomBar">
-        <div class="stat">
-          <div class="label">BATTERY</div>
-          <div class="bar"><div id="batteryFill" class="fill"></div></div>
-        </div>
         <div class="stat">
           <div class="label">STAMINA</div>
           <div class="bar"><div id="staminaFill" class="fill green"></div></div>
         </div>
+        <div class="stat">
+          <div class="label">MONSTER</div>
+          <div class="bar"><div id="distFill" class="fill red"></div></div>
+          <div id="monsterState" class="sub"></div>
+        </div>
         <div id="inventory">
-          <div id="slotFlash" class="slot active">F · Flashlight</div>
-          <div id="slotBino"  class="slot">B · Binoculars</div>
-          <div id="slotKeys"  class="slot">Keys: <span id="keyCount">0/3</span></div>
+          <div id="slotBino"  class="slot">[SHIFT] Binoculars</div>
+          <div id="slotHeld"  class="slot">Empty hand</div>
+          <div id="slotCCTV"  class="slot">CCTV · READY</div>
         </div>
       </div>
 
       <div id="prompt"></div>
       <div id="subtitle"></div>
-      <div id="objective">Objective: find truck keys, reach the YELLOW TRUCK, escape.</div>
+      <div id="objective">Objective: reach the YELLOW TRUCK and escape the factory</div>
+    </div>
+
+    <!-- CCTV overlay (the security room monitor view) -->
+    <div id="cctvOverlay" class="hidden">
+      <div id="cctvFrame">
+        <div id="cctvHeader">
+          <span class="cctv-brand">AMBER-SEC // SURVEILLANCE</span>
+          <span id="cctvStatus" class="cctv-status">READY</span>
+          <span id="cctvCooldown"></span>
+          <span class="cctv-hint">press [E] to disconnect</span>
+        </div>
+        <div id="cctvGrid"></div>
+        <div class="cctv-noise"></div>
+      </div>
     </div>
 
     <!-- Start screen -->
     <div id="startScreen" class="overlay">
       <div class="panel">
-        <h1>THE YELLOW TRUCK</h1>
-        <p class="tag">You woke up in an abandoned factory. Something is already hunting.</p>
+        <h1>OLD AMBER FACTORY</h1>
+        <p class="tag">Заброшенный завод «Янтарь». Что-то в темноте учится. Добраться до Жёлтой Машины.</p>
         <div class="controls">
-          <div><b>WASD</b> — move</div>
-          <div><b>Shift</b> — run (loud)</div>
-          <div><b>Ctrl</b> — crouch (quiet)</div>
-          <div><b>F</b> — flashlight</div>
-          <div><b>B</b> — binoculars (slow, deaf)</div>
-          <div><b>E</b> — interact / hide / exit locker</div>
-          <div><b>Mouse</b> — look</div>
+          <div><b>WASD</b> — движение</div>
+          <div><b>X</b> — бег (громко)</div>
+          <div><b>Ctrl</b> — присесть (тихо)</div>
+          <div><b>Shift (зажать)</b> — бинокль</div>
+          <div><b>Колесо мыши</b> — зум бинокля 1x..8x</div>
+          <div><b>E</b> — взаимодействие / прятаться</div>
+          <div><b>ЛКМ (зажать+отпустить)</b> — прицел и бросок</div>
+          <div><b>Q</b> — выбросить предмет</div>
         </div>
-        <p class="warn">Find 3 KEYS, reach the yellow truck in the garage, survive the start sequence.</p>
-        <button id="startBtn">ENTER THE DARK</button>
+        <p class="warn">Монстр адаптируется под твой стиль. Прячешься — проверит шкафы. Бегаешь — догонит. Шумишь — придёт.</p>
+        <button id="startBtn">ВОЙТИ ВО ТЬМУ</button>
       </div>
     </div>
 
     <!-- Death screen -->
     <div id="deathScreen" class="overlay hidden">
       <div class="panel dark">
-        <h1 class="blood">YOU WERE TAKEN</h1>
-        <p id="deathText" class="tag">The long arms close around you. You never saw the sky again.</p>
-        <button id="retryBtn">TRY AGAIN</button>
+        <h1 class="blood">ОН ДОБРАЛСЯ ДО ТЕБЯ</h1>
+        <p id="deathText" class="tag">Длинные руки сомкнулись. Ты больше не увидишь неба.</p>
+        <button id="retryBtn">ЕЩЁ РАЗ</button>
       </div>
     </div>
 
     <!-- Win screen -->
     <div id="winScreen" class="overlay hidden">
       <div class="panel">
-        <h1 class="yellow">ENGINE ROARS</h1>
-        <p class="tag">The headlights cut through the fog. You drive, and you do not look back.</p>
-        <button id="winBtn">PLAY AGAIN</button>
+        <h1 class="yellow">ДВИГАТЕЛЬ РЫЧИТ</h1>
+        <p class="tag">Фары прорезают туман. Ты уезжаешь и не оборачиваешься.</p>
+        <button id="winBtn">СЫГРАТЬ ЕЩЁ</button>
       </div>
     </div>
 
-    <!-- Jumpscare overlay (death cutscene) -->
+    <!-- Jumpscare overlay -->
     <div id="jumpscare" class="hidden">
       <div class="face"></div>
+      <div class="jumpscare-fx"></div>
     </div>
   </div>
 
-  <!-- Three.js via import map -->
   <script type="importmap">
     {
       "imports": {
