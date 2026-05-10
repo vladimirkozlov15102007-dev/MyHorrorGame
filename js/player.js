@@ -1,11 +1,35 @@
-// Player controller: movement, collision (AABB), flashlight, binoculars,
-// stats (battery, stamina), noise emission.
+// Player controller.
+//
+// Controls (as specified):
+//   WASD                  — move
+//   LeftShift  (hold)     — binoculars ACTIVE while held; wheel zooms 1x..8x;
+//                           player is slower, hearing dampened.
+//   LeftCtrl              — crouch (quiet)
+//   X                     — sprint toggle (we use X because LShift is used for
+//                           binoculars per spec "зажатием Shift").
+//   E                     — interact / hide / pick up / exit locker
+//   LMB (hold+release)    — aim + throw held item (power scales with hold time)
+//   Q                     — drop held throwable
+//   Wheel up/down         — binocular zoom (only when binoculars active)
+//   Mouse                 — look
+//
+// No flashlight. Level has ambient + lamp lighting.
+//
+// Public state fields read by AI / HUD / audio:
+//   health, stamina, hidden, hiddenIn, keyCount, dead
+//   binocularsOn (true while Shift held + not hidden)
+//   binocZoom (1..8)
+//   crouched, sprinting
+//   held: { kind } | null
+//   aiming: bool, aimPower: 0..1
+//   noise, noisePos (current-frame)
+//   adaptive counters: timesHidden, binocularsSeconds, sprintingSeconds, throwsMade, distractionNoiseTotal
 
 import * as THREE from "three";
 import { Audio } from "./audio.js";
 
 const PLAYER_RADIUS = 0.35;
-const EYE_HEIGHT = 1.65;
+const EYE_HEIGHT = 1.68;
 const CROUCH_HEIGHT = 1.05;
 
 export class Player {
@@ -13,7 +37,6 @@ export class Player {
     this.camera = camera;
     this.level = level;
 
-    // Position & movement
     this.pos = new THREE.Vector3(level.playerSpawn.x, EYE_HEIGHT, level.playerSpawn.z);
     this.vel = new THREE.Vector3();
     this.yaw = 0;
@@ -21,49 +44,57 @@ export class Player {
 
     this.input = {
       forward: 0, right: 0,
-      sprint: false, crouch: false,
-      interact: false, interactHeld: false,
+      sprint: false,        // X toggled
+      crouch: false,
+      binocHeld: false,     // LShift held
+      interact: false,
+      interactHeld: false,
+      lmbHeld: false,
+      dropHeld: false,
     };
 
     this.state = {
       health: 1.0,
       stamina: 1.0,
-      battery: 1.0,
-      flashlightOn: true,
+
       binocularsOn: false,
+      binocZoom: 2.0,
+
       crouched: false,
       sprinting: false,
+
       hidden: false,
       hiddenIn: null,
+
       keyCount: 0,
       dead: false,
-      // Noise emitted this frame (0..1), consumed by monster AI
-      noise: 0,
+
+      held: null,                // { kind }
+      aiming: false,
+      aimPower: 0,
+
+      noise: 0,                  // 0..1 this frame
       noisePos: new THREE.Vector3(),
-      // Counters for adaptive AI
+
+      // adaptive counters
       timesHidden: 0,
-      flashlightSeconds: 0,
+      binocularsSeconds: 0,
       sprintingSeconds: 0,
+      throwsMade: 0,
+      distractionNoiseTotal: 0,
+
+      // CCTV immobility
+      usingCCTV: false,
     };
 
-    // Flashlight (SpotLight)
-    this.flashlight = new THREE.SpotLight(0xfff0d0, 2.4, 22, Math.PI / 7, 0.35, 1.2);
-    this.flashlight.position.copy(this.pos);
-    this.flashTarget = new THREE.Object3D();
-    this.flashlight.target = this.flashTarget;
-    // Note: parenting to camera is tempting but we manage manually for clean ray use
-    this.flashOnBaseIntensity = 2.4;
-
-    // Footstep timing
     this._footTimer = 0;
+    this._aimStart = 0;
 
-    // Mouse sensitivity
     this.sens = 0.0022;
   }
 
   attachToScene(scene) {
-    scene.add(this.flashlight);
-    scene.add(this.flashTarget);
+    // No flashlight — nothing to attach.
   }
 
   setPosition(x, y, z) {
@@ -73,61 +104,125 @@ export class Player {
 
   onMouseMove(dx, dy) {
     if (this.state.dead) return;
-    this.yaw -= dx * this.sens;
-    this.pitch -= dy * this.sens;
+    if (this.state.usingCCTV) return;   // player immobile while on CCTV
+    const sens = this.state.binocularsOn ? this.sens / (this.state.binocZoom * 0.7) : this.sens;
+    this.yaw -= dx * sens;
+    this.pitch -= dy * sens;
     const lim = Math.PI / 2 - 0.01;
     if (this.pitch > lim) this.pitch = lim;
     if (this.pitch < -lim) this.pitch = -lim;
   }
 
-  toggleFlashlight() {
-    if (this.state.binocularsOn) return; // can't while using binoculars
-    if (this.state.battery <= 0 && !this.state.flashlightOn) return;
-    this.state.flashlightOn = !this.state.flashlightOn;
-    Audio.flashlightClick();
+  onMouseWheel(delta) {
+    // wheel changes binocular zoom when active, between 1..8
+    if (!this.state.binocularsOn) return;
+    const step = delta > 0 ? -0.5 : 0.5;
+    this.state.binocZoom = Math.max(1, Math.min(8, this.state.binocZoom + step));
+    Audio.binocularZoom();
   }
 
-  toggleBinoculars() {
-    if (this.state.hidden) return;
-    this.state.binocularsOn = !this.state.binocularsOn;
-    Audio.binocularClick();
-    // disable flashlight while binoculars
-    if (this.state.binocularsOn) this.state.flashlightOn = false;
+  toggleSprint() {
+    // X toggles sprint intent; only applies when stamina > 0 and moving
+    this.input.sprint = !this.input.sprint;
+  }
+
+  dropHeld(throwableSystem, level) {
+    if (!this.state.held) return;
+    // spawn a small, slow projectile at player feet (gentle drop)
+    const origin = new THREE.Vector3(this.pos.x, 0.6, this.pos.z);
+    const dir = this.getLookDir();
+    const vel = new THREE.Vector3(dir.x * 1.5, 0.5, dir.z * 1.5);
+    throwableSystem.spawn(origin, vel, this.state.held.kind);
+    this.state.held = null;
+  }
+
+  beginAim() {
+    if (!this.state.held) return;
+    if (this.state.hidden || this.state.usingCCTV || this.state.binocularsOn) return;
+    this.state.aiming = true;
+    this._aimStart = performance.now() / 1000;
+  }
+
+  endAimAndThrow(throwableSystem) {
+    if (!this.state.aiming || !this.state.held) {
+      this.state.aiming = false;
+      return;
+    }
+    const now = performance.now() / 1000;
+    const held = Math.max(0.08, Math.min(1.4, now - this._aimStart));
+    // power curve
+    const t = Math.min(1, (held - 0.08) / (1.4 - 0.08));
+    const speed = 6 + t * 12;  // 6..18 m/s
+    const dir = this.getLookDir();
+    const origin = new THREE.Vector3(
+      this.pos.x + dir.x * 0.4,
+      this.pos.y - 0.1,
+      this.pos.z + dir.z * 0.4
+    );
+    // give a small upward arc when aimed flat
+    const up = 0.6 + Math.max(0, this.pitch) * 2;
+    const vel = new THREE.Vector3(dir.x * speed, dir.y * speed + up, dir.z * speed);
+    throwableSystem.spawn(origin, vel, this.state.held.kind);
+
+    // release resource
+    this.state.held = null;
+    this.state.aiming = false;
+    this.state.aimPower = 0;
+    this.state.throwsMade += 1;
+
+    // throwing itself is silent (your arm); the IMPACT is the noise.
+    // BUT we add a tiny localized breath spike to the monster hear range briefly
+    // by bumping noise for one frame.
+    this.state.noise = Math.max(this.state.noise, 0.05);
+    this.state.noisePos.copy(this.pos);
   }
 
   update(dt) {
     if (this.state.dead) return;
 
-    // --- Hidden state: no movement ---
-    if (this.state.hidden) {
+    // --- Hidden / CCTV immobile states ---
+    if (this.state.hidden || this.state.usingCCTV) {
       this.state.stamina = Math.min(1.0, this.state.stamina + dt * 0.35);
-      this._applyCamera(dt);
       this.state.noise = 0;
-      // Flashlight off while in locker
-      this._updateFlashlightPose(dt, false);
+      this._applyCamera(dt);
       return;
     }
 
-    // --- Determine speed ---
-    const wantSprint = this.input.sprint && this.state.stamina > 0.05 && !this.state.binocularsOn;
+    // --- Binoculars active while shift held (and not dead/hidden/CCTV) ---
+    this.state.binocularsOn = this.input.binocHeld;
+    if (this.state.binocularsOn) this.state.binocularsSeconds += dt;
+
+    // --- Aim update power ---
+    if (this.state.aiming && this.input.lmbHeld && this.state.held) {
+      const now = performance.now() / 1000;
+      const held = Math.min(1.4, now - this._aimStart);
+      this.state.aimPower = Math.min(1, (held - 0.08) / (1.4 - 0.08));
+    } else {
+      this.state.aimPower = 0;
+    }
+
+    // --- Speed ---
+    const wantSprint = this.input.sprint && this.state.stamina > 0.05
+      && !this.state.binocularsOn && !this.state.aiming;
     const wantCrouch = this.input.crouch;
     this.state.sprinting = wantSprint && (Math.abs(this.input.forward) + Math.abs(this.input.right) > 0);
     this.state.crouched = wantCrouch;
 
-    let speed = 3.2;                       // walk
-    if (this.state.crouched) speed = 1.6;  // crouch
-    if (this.state.sprinting) speed = 5.6; // run
-    if (this.state.binocularsOn) speed = 1.2; // binoculars slow
+    let speed = 3.3;                     // walk
+    if (this.state.crouched) speed = 1.6;
+    if (this.state.sprinting) speed = 5.8;
+    if (this.state.binocularsOn) speed = 1.15;
+    if (this.state.aiming) speed = Math.min(speed, 2.2);
 
-    // Stamina
     if (this.state.sprinting) {
       this.state.stamina = Math.max(0, this.state.stamina - dt * 0.28);
       this.state.sprintingSeconds += dt;
+      if (this.state.stamina <= 0) this.input.sprint = false;
     } else {
       this.state.stamina = Math.min(1.0, this.state.stamina + dt * 0.22);
     }
 
-    // Direction vectors (horizontal)
+    // Direction
     const fwd = new THREE.Vector3(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     const right = new THREE.Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
@@ -139,19 +234,9 @@ export class Player {
     this.vel.x = moveDir.x * speed;
     this.vel.z = moveDir.z * speed;
 
-    // Apply with collision (axis-separated)
     this._moveWithCollision(dt);
 
-    // Flashlight battery drain
-    if (this.state.flashlightOn) {
-      this.state.battery = Math.max(0, this.state.battery - dt * 0.012); // ~83s
-      this.state.flashlightSeconds += dt;
-      if (this.state.battery <= 0) {
-        this.state.flashlightOn = false;
-      }
-    }
-
-    // Noise emission (for AI)
+    // Noise (for AI): sprint = 1.0, walk 0.45, crouch 0.1, aim/bino no change
     this.state.noise = 0;
     if (moveDir.lengthSq() > 0) {
       if (this.state.sprinting) this.state.noise = 1.0;
@@ -166,7 +251,7 @@ export class Player {
       this._footTimer -= dt;
       if (this._footTimer <= 0) {
         this._footTimer = stepInterval;
-        const intensity = this.state.sprinting ? 1.2 : (this.state.crouched ? 0.35 : 0.8);
+        const intensity = this.state.sprinting ? 1.3 : (this.state.crouched ? 0.35 : 0.85);
         Audio.footstep(intensity);
       }
     } else {
@@ -174,21 +259,16 @@ export class Player {
     }
 
     this._applyCamera(dt);
-    this._updateFlashlightPose(dt, true);
   }
 
   _moveWithCollision(dt) {
     const colliders = this.level.colliders;
-
-    // X axis
     const nextX = this.pos.x + this.vel.x * dt;
     if (!this._collides(nextX, this.pos.z, colliders)) {
       this.pos.x = nextX;
     } else {
-      // slide: try small separation
       this.vel.x = 0;
     }
-    // Z axis
     const nextZ = this.pos.z + this.vel.z * dt;
     if (!this._collides(this.pos.x, nextZ, colliders)) {
       this.pos.z = nextZ;
@@ -200,6 +280,7 @@ export class Player {
   _collides(x, z, colliders) {
     const r = PLAYER_RADIUS;
     for (const c of colliders) {
+      if (c.kind === "pallet") continue; // passable
       if (x + r > c.minX && x - r < c.maxX &&
           z + r > c.minZ && z - r < c.maxZ) return true;
     }
@@ -208,41 +289,25 @@ export class Player {
 
   _applyCamera(dt) {
     const targetY = this.state.crouched ? CROUCH_HEIGHT : EYE_HEIGHT;
-    // smooth
     this.pos.y += (targetY - this.pos.y) * Math.min(1, dt * 10);
 
     this.camera.position.copy(this.pos);
-    // yaw/pitch to quaternion
-    const euler = new THREE.Euler(this.pitch, this.yaw, 0, "YXZ");
+
+    // small aim sway when holding LMB
+    let sway = new THREE.Vector2(0, 0);
+    if (this.state.aiming) {
+      const t = performance.now() / 1000;
+      sway.x = Math.sin(t * 1.9) * 0.012 * (1 + this.state.aimPower * 0.5);
+      sway.y = Math.cos(t * 2.3) * 0.008 * (1 + this.state.aimPower * 0.5);
+    }
+
+    const euler = new THREE.Euler(this.pitch + sway.y, this.yaw + sway.x, 0, "YXZ");
     this.camera.quaternion.setFromEuler(euler);
 
-    // Binocular zoom via fov
-    const wantFov = this.state.binocularsOn ? 22 : 70;
-    this.camera.fov += (wantFov - this.camera.fov) * Math.min(1, dt * 8);
+    // FOV: binoculars = 70 / zoom; default = 70.
+    const wantFov = this.state.binocularsOn ? (70 / this.state.binocZoom) : 70;
+    this.camera.fov += (wantFov - this.camera.fov) * Math.min(1, dt * 10);
     this.camera.updateProjectionMatrix();
-  }
-
-  _updateFlashlightPose(dt, visible) {
-    const on = visible && this.state.flashlightOn && !this.state.hidden;
-    this.flashlight.intensity = on ? this.flashOnBaseIntensity : 0.0;
-    if (!on) return;
-    // Position slightly in front of camera so its own cone doesn't clip walls behind the player
-    const dir = this.getLookDir();
-    const offset = new THREE.Vector3(
-      -Math.cos(this.yaw) * 0.15, // slight right hand
-      -0.1,
-      Math.sin(this.yaw) * 0.15
-    );
-    this.flashlight.position.set(
-      this.pos.x + offset.x,
-      this.pos.y + offset.y,
-      this.pos.z + offset.z
-    );
-    this.flashTarget.position.set(
-      this.pos.x + dir.x * 6,
-      this.pos.y + dir.y * 6,
-      this.pos.z + dir.z * 6
-    );
   }
 
   getLookDir() {
